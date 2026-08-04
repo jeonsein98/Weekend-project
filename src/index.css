@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .font-serif {
+    font-family: 'Gowun Batang', Georgia, serif;
+  }
+  .font-sans {
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+}
+
+/* Custom hide scrollbar for thumbnail strip */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom natural scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F5F2ED;
+}
+::-webkit-scrollbar-thumb {
+  background: #D4CEBF;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #7C8E7E;
+}

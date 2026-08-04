@@ -1,0 +1,6 @@
+{
+  "name": "주말 지낸 이야기",
+  "description": "초보 교사와 학생을 위한 주차별 주말 지낸 이야기 기록 및 PPT 슬라이드 발표 웹앱",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
