@@ -12,6 +12,29 @@ interface InstagramStoryBarProps {
   currentStoryId?: string;
 }
 
+const StudentStoryAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ photoUrl, studentName }) => {
+  const [hasError, setHasError] = React.useState(false);
+
+  if (photoUrl && !hasError) {
+    return (
+      <img
+        src={photoUrl}
+        alt=""
+        onError={() => setHasError(true)}
+        className="w-full h-full object-cover rounded-full"
+      />
+    );
+  }
+
+  const displayName = studentName.length >= 2 ? studentName.slice(-2) : studentName;
+
+  return (
+    <div className="w-full h-full rounded-full bg-gradient-to-br from-pink-100 via-purple-50 to-amber-100 flex items-center justify-center text-xs font-extrabold text-pink-600">
+      {displayName}
+    </div>
+  );
+};
+
 export const InstagramStoryBar: React.FC<InstagramStoryBarProps> = ({
   stories,
   roster,
@@ -98,7 +121,7 @@ export const InstagramStoryBar: React.FC<InstagramStoryBarProps> = ({
           ) : (
             weekStories.map((story) => {
               const isActive = story.id === currentStoryId;
-              const photoUrl = story.imageUrl || (story.imageUrls && story.imageUrls[0]);
+              const photoUrl = (story.imageUrls && story.imageUrls.length > 0) ? story.imageUrls[0] : (story.imageUrl || '');
 
               return (
                 <button
@@ -115,17 +138,7 @@ export const InstagramStoryBar: React.FC<InstagramStoryBarProps> = ({
                     }`}
                   >
                     <div className="w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-white p-0.5 overflow-hidden">
-                      {photoUrl ? (
-                        <img
-                          src={photoUrl}
-                          alt={story.studentName}
-                          className="w-full h-full object-cover rounded-full"
-                        />
-                      ) : (
-                        <div className="w-full h-full rounded-full bg-[#EFEFEF] flex items-center justify-center text-xs font-bold text-[#262626]">
-                          {story.studentName.slice(0, 2)}
-                        </div>
-                      )}
+                      <StudentStoryAvatar photoUrl={photoUrl} studentName={story.studentName} />
                     </div>
                   </div>
                   <span className={`text-[11px] font-bold max-w-[64px] truncate ${isActive ? 'text-black underline decoration-pink-500' : 'text-[#262626]'}`}>

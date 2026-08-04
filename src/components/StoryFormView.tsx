@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
   Upload,
@@ -169,39 +169,101 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
     setIsFormOpen(true);
   };
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Compress image helper to ensure mobile photo uploads work reliably & lightweight
+  const compressMobilePhoto = (file: File): Promise<string> => {
+    return new Promise((resolve) => {
+      // Allow image MIME or standard image extensions or empty type from mobile file pickers
+      const isLikelyImage =
+        file.type.startsWith('image/') ||
+        /\.(jpe?g|png|heic|heif|webp|gif)$/i.test(file.name) ||
+        file.type === '';
+
+      if (!isLikelyImage) {
+        onShowToast('이미지 파일(JPG, PNG, WEBP 등)만 업로드 가능합니다.', 'error');
+        resolve('');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onerror = () => {
+        onShowToast('사진 파일을 읽는 데 실패했습니다.', 'error');
+        resolve('');
+      };
+      reader.onload = (e) => {
+        const src = e.target?.result as string;
+        if (!src) {
+          resolve('');
+          return;
+        }
+
+        const img = new Image();
+        img.onerror = () => {
+          // If canvas draw fails, fallback to original DataURL
+          resolve(src);
+        };
+        img.onload = () => {
+          try {
+            const MAX_WIDTH = 1200;
+            const MAX_HEIGHT = 1200;
+            let width = img.width;
+            let height = img.height;
+
+            if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+              if (width / height > MAX_WIDTH / MAX_HEIGHT) {
+                height = Math.round((height * MAX_WIDTH) / width);
+                width = MAX_WIDTH;
+              } else {
+                width = Math.round((width * MAX_HEIGHT) / height);
+                height = MAX_HEIGHT;
+              }
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(src);
+              return;
+            }
+
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressed = canvas.toDataURL('image/jpeg', 0.82);
+            resolve(compressed);
+          } catch (err) {
+            resolve(src);
+          }
+        };
+        img.src = src;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   // Handle Image Upload (Max 3)
-  const handleFilesAdd = (files: FileList | File[]) => {
+  const handleFilesAdd = async (files: FileList | File[]) => {
     const fileArray = Array.from(files);
     if (imageUrls.length + fileArray.length > 3) {
       onShowToast('사진은 한 이야기당 최대 3장까지만 올릴 수 있습니다.', 'error');
       return;
     }
 
-    fileArray.forEach((file) => {
-      if (!file.type.startsWith('image/')) {
-        onShowToast('이미지 파일만 업로드 가능합니다.', 'error');
-        return;
+    let addedCount = 0;
+    for (const file of fileArray) {
+      if (imageUrls.length + addedCount >= 3) break;
+      const dataUrl = await compressMobilePhoto(file);
+      if (dataUrl) {
+        setImageUrls((prev) => (prev.length >= 3 ? prev : [...prev, dataUrl]));
+        setImageCaptions((prev) => (prev.length >= 3 ? prev : [...prev, '']));
+        addedCount++;
       }
-      if (file.size > 15 * 1024 * 1024) {
-        onShowToast('파일 크기가 15MB 이하인 사진을 업로드해 주세요.', 'error');
-        return;
-      }
+    }
 
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        setImageUrls((prev) => {
-          if (prev.length >= 3) return prev;
-          return [...prev, result];
-        });
-        setImageCaptions((prev) => {
-          if (prev.length >= 3) return prev;
-          return [...prev, ''];
-        });
-        onShowToast('사진이 추가되었습니다.', 'success');
-      };
-      reader.readAsDataURL(file);
-    });
+    if (addedCount > 0) {
+      onShowToast(`${addedCount}장의 사진이 성공적으로 업로드되었습니다.`, 'success');
+    }
   };
 
   // Remove photo at index
@@ -457,6 +519,8 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                   <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-1.5 bg-[#FAFAFA] border border-[#DBDBDB] rounded-xl">
                     {roster
                       .filter((s) => s.name !== '김은솔')
+                      .slice()
+                      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
                       .map((s) => (
                         <button
                           key={s.id}
@@ -774,21 +838,26 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
-                  className={`border-2 border-dashed rounded-2xl sm:rounded-3xl p-5 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-2xl sm:rounded-3xl p-5 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer touch-manipulation active:scale-[0.99] ${
                     dragActive
                       ? 'border-pink-500 bg-pink-50/50'
                       : 'border-[#DBDBDB] bg-[#FAFAFA] hover:bg-[#F5F5F5] hover:border-pink-400'
                   }`}
                 >
                   <input
+                    ref={fileInputRef}
                     id="story-form-file-input"
                     type="file"
                     accept="image/*"
                     multiple
-                    onChange={(e) => e.target.files && handleFilesAdd(e.target.files)}
+                    onChange={(e) => {
+                      if (e.target.files) handleFilesAdd(e.target.files);
+                      e.target.value = ''; // Reset input to allow re-selecting same photo if needed
+                    }}
                     className="hidden"
                   />
-                  <label htmlFor="story-form-file-input" className="cursor-pointer flex flex-col items-center gap-2 w-full">
+                  <div className="flex flex-col items-center gap-2 w-full pointer-events-none">
                     <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-tr from-purple-600 via-pink-500 to-amber-500 p-0.5 text-white flex items-center justify-center shadow-md">
                       <div className="w-full h-full rounded-full bg-white flex items-center justify-center text-pink-500">
                         <Upload className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -800,7 +869,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                     <span className="text-[11px] text-[#8E8E8E]">
                       스마트폰 앨범에서 우리 아이 최고 선명한 사진을 선택하세요
                     </span>
-                  </label>
+                  </div>
                 </div>
               )}
 

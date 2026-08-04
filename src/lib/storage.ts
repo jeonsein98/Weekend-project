@@ -11,16 +11,7 @@ export const INITIAL_ROSTER: RosterStudent[] = [
 
 export function ensureRosterOrder(list: RosterStudent[]): RosterStudent[] {
   if (!Array.isArray(list) || list.length === 0) return list;
-  const result = [...list];
-  const idxA = result.findIndex((s) => s.name === '안세은');
-  const idxB = result.findIndex((s) => s.name === '엄소율');
-
-  if (idxA !== -1 && idxB !== -1 && idxA > idxB) {
-    const [seEun] = result.splice(idxA, 1);
-    const newIdxB = result.findIndex((s) => s.name === '엄소율');
-    result.splice(newIdxB, 0, seEun);
-  }
-  return result;
+  return [...list].sort((a, b) => a.name.localeCompare(b.name, 'ko'));
 }
 
 export function getRosterList(): RosterStudent[] {
@@ -71,19 +62,25 @@ export function getLocalStories(): StoryItem[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      // Normalize stories so imageUrls is guaranteed
-      const normalized = parsed.map((item: any) => ({
-        ...item,
-        imageUrls: item.imageUrls && Array.isArray(item.imageUrls) && item.imageUrls.length > 0
-          ? item.imageUrls
-          : (item.imageUrl ? [item.imageUrl] : [])
-      }));
+      const legacyDemoIds = new Set(['demo-1', 'demo-2', 'demo-3', 'demo-4']);
+      const legacyDemoNames = new Set(['김민준', '이서연', '박준우', '최하은']);
+
+      // Normalize stories & filter out legacy demo items
+      const normalized = parsed
+        .filter((item: any) => !legacyDemoIds.has(item.id) && !legacyDemoNames.has(item.studentName))
+        .map((item: any) => ({
+          ...item,
+          imageUrls: item.imageUrls && Array.isArray(item.imageUrls) && item.imageUrls.length > 0
+            ? item.imageUrls
+            : (item.imageUrl ? [item.imageUrl] : [])
+        }));
 
       // Always sync Eunsol sample story images with latest default child photos
       const eunsolIdx = normalized.findIndex((s: any) => s.id === 'demo-eunsol' || s.studentName === '김은솔');
       if (eunsolIdx !== -1) {
         normalized[eunsolIdx] = {
           ...normalized[eunsolIdx],
+          imageUrl: INITIAL_STORIES[0].imageUrls[0],
           imageUrls: INITIAL_STORIES[0].imageUrls,
           imageCaptions: INITIAL_STORIES[0].imageCaptions
         };
