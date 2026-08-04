@@ -428,30 +428,54 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
           <form onSubmit={handleParentLogin} className="space-y-5">
             <div>
-              <label className="block text-[11px] font-extrabold text-[#737373] uppercase tracking-wider mb-2">
-                어린이 이름 입력 <span className="text-pink-500">*</span>
+              <label className="block text-xs font-extrabold text-[#737373] uppercase tracking-wider mb-2">
+                어린이 이름 선택/입력 <span className="text-pink-500">*</span>
               </label>
 
               <input
                 type="text"
-                placeholder="자녀 이름을 입력해 주세요 (예: 김은솔)"
+                placeholder="자녀 이름을 입력하거나 아래 원아 명단에서 선택해 주세요"
                 value={inputStudentName}
                 onChange={(e) => setInputStudentName(e.target.value)}
-                className="w-full bg-[#FAFAFA] border border-[#DBDBDB] rounded-2xl px-4 py-3 text-xs font-bold text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 focus:bg-white placeholder-[#8E8E8E]"
+                className="w-full bg-[#FAFAFA] border border-[#DBDBDB] rounded-2xl px-4 py-3.5 text-base sm:text-xs font-bold text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 focus:bg-white placeholder-[#8E8E8E] min-h-[48px] touch-manipulation"
               />
+
+              {/* Quick Select Buttons from Roster */}
+              {roster.length > 0 && (
+                <div className="mt-3">
+                  <span className="text-[11px] font-bold text-[#8E8E8E] block mb-1.5">터치하여 빠르게 원아 선택:</span>
+                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-1.5 bg-[#FAFAFA] border border-[#DBDBDB] rounded-xl">
+                    {roster.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => setInputStudentName(s.name)}
+                        className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all min-h-[36px] ${
+                          inputStudentName === s.name
+                            ? 'bg-pink-500 text-white shadow-xs'
+                            : 'bg-white border border-[#DBDBDB] text-[#262626] hover:bg-pink-50'
+                        }`}
+                      >
+                        {s.name} ({s.className || '반'})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div>
-              <label className="block text-[11px] font-extrabold text-[#737373] uppercase tracking-wider mb-2">
+              <label className="block text-xs font-extrabold text-[#737373] uppercase tracking-wider mb-2">
                 학부모 비밀번호 (선택 - 4자리 PIN)
               </label>
               <input
                 type="password"
+                inputMode="numeric"
                 maxLength={4}
                 placeholder="내 이야기 수정 시 사용할 4자리 PIN (기본: 1234)"
                 value={inputPin}
                 onChange={(e) => setInputPin(e.target.value)}
-                className="w-full bg-[#FAFAFA] border border-[#DBDBDB] rounded-2xl px-4 py-3 text-xs font-bold text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 focus:bg-white placeholder-[#8E8E8E]"
+                className="w-full bg-[#FAFAFA] border border-[#DBDBDB] rounded-2xl px-4 py-3.5 text-base sm:text-xs font-bold text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 focus:bg-white placeholder-[#8E8E8E] min-h-[48px] touch-manipulation"
               />
             </div>
 
@@ -464,9 +488,9 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
             <button
               type="submit"
-              className="w-full py-3.5 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 text-white font-extrabold text-xs shadow-md transition-all active:scale-98 flex items-center justify-center gap-2 hover:opacity-95"
+              className="w-full py-4 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 text-white font-extrabold text-sm shadow-md transition-all active:scale-98 flex items-center justify-center gap-2 hover:opacity-95 min-h-[50px] touch-manipulation"
             >
-              <UserCheck className="w-4 h-4" />
+              <UserCheck className="w-5 h-5" />
               <span>자녀 전용 작성/수정 공간으로 접속하기</span>
             </button>
           </form>
@@ -849,7 +873,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                           placeholder="예: 바닷가에서 모래성 쌓는 중! 🏰"
                           value={imageCaptions[idx] || ''}
                           onChange={(e) => handleCaptionChange(idx, e.target.value)}
-                          className="w-full bg-[#FAFAFA] border border-[#DBDBDB] rounded-xl px-3 py-2 text-sm sm:text-xs font-medium text-[#262626] focus:outline-none focus:ring-1 focus:ring-pink-500 placeholder-[#8E8E8E]"
+                          className="w-full bg-[#FAFAFA] border border-[#DBDBDB] rounded-xl px-3.5 py-3 text-base sm:text-xs font-medium text-[#262626] focus:outline-none focus:ring-1 focus:ring-pink-500 placeholder-[#8E8E8E] min-h-[44px] touch-manipulation"
                         />
                       </div>
                     </div>
@@ -870,7 +894,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                   placeholder="예: 신나는 여름방학 동해 바다 체험과 우리가족 모래성 쌓기 🌊"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  className="w-full bg-white border border-[#DBDBDB] rounded-2xl px-3.5 py-3 text-sm sm:text-xs font-extrabold text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 placeholder-[#8E8E8E]"
+                  className="w-full bg-white border border-[#DBDBDB] rounded-2xl px-4 py-3.5 text-base sm:text-xs font-extrabold text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 placeholder-[#8E8E8E] min-h-[46px] touch-manipulation"
                 />
               </div>
 
@@ -884,7 +908,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                   placeholder="주말 동안 있었던 기억에 남는 경험, 활동, 아이가했던 재밌는 말이나 소감을 인스타그램 캡션처럼 자유롭게 적어주세요."
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
-                  className="w-full bg-white border border-[#DBDBDB] rounded-2xl p-3.5 text-sm sm:text-xs font-medium text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 placeholder-[#8E8E8E] leading-relaxed resize-y min-h-[110px]"
+                  className="w-full bg-white border border-[#DBDBDB] rounded-2xl p-4 text-base sm:text-xs font-medium text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 placeholder-[#8E8E8E] leading-relaxed resize-y min-h-[120px] touch-manipulation"
                 />
 
                 <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-pink-600 font-extrabold">

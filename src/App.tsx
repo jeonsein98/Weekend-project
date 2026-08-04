@@ -29,7 +29,7 @@ export default function App() {
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [selectedWeek, setSelectedWeek] = useState<string>(() => getCurrentWeekString());
   const [selectedClass, setSelectedClass] = useState<string>('전체');
-  const [currentView, setCurrentView] = useState<'ppt' | 'form' | 'gallery'>('ppt');
+  const [currentView, setCurrentView] = useState<'ppt' | 'form' | 'gallery'>('form');
   const [gasConfig, setGasConfig] = useState<GasConfig>({ webAppUrl: '', isConnected: false });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
