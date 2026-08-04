@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
@@ -147,19 +148,56 @@ app.post('/api/gemini-caption-recommendation', async (req, res) => {
 
     const contentsParts: any[] = [];
     if (imageBase64 && typeof imageBase64 === 'string') {
-      const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
-      contentsParts.push({
-        inlineData: {
-          data: cleanBase64,
-          mimeType: 'image/jpeg'
+      if (imageBase64.startsWith('http://') || imageBase64.startsWith('https://')) {
+        try {
+          const imgRes = await fetch(imageBase64);
+          if (imgRes.ok) {
+            const arrayBuffer = await imgRes.arrayBuffer();
+            const base64Data = Buffer.from(arrayBuffer).toString('base64');
+            const mimeType = imgRes.headers.get('content-type') || 'image/jpeg';
+            contentsParts.push({
+              inlineData: {
+                data: base64Data,
+                mimeType: mimeType.split(';')[0]
+              }
+            });
+          }
+        } catch (imgErr) {
+          console.error('Failed to fetch image URL for Gemini caption:', imgErr);
         }
-      });
+      } else if (imageBase64.startsWith('/')) {
+        try {
+          const filePath = path.join(process.cwd(), 'public', imageBase64);
+          if (fs.existsSync(filePath)) {
+            const fileBuffer = fs.readFileSync(filePath);
+            const base64Data = fileBuffer.toString('base64');
+            const ext = path.extname(filePath).toLowerCase();
+            const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+            contentsParts.push({
+              inlineData: {
+                data: base64Data,
+                mimeType
+              }
+            });
+          }
+        } catch (localFileErr) {
+          console.error('Failed to read local static file for Gemini caption:', localFileErr);
+        }
+      } else {
+        const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+        contentsParts.push({
+          inlineData: {
+            data: cleanBase64,
+            mimeType: 'image/jpeg'
+          }
+        });
+      }
     }
     contentsParts.push({ text: textPrompt });
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.6-flash',
-      contents: contentsParts.length === 1 ? contentsParts[0].text : { parts: contentsParts },
+      contents: { parts: contentsParts },
       config: {
         systemInstruction,
         temperature: 0.8

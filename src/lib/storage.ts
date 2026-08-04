@@ -6,13 +6,22 @@ const STORAGE_KEY_GAS_CONFIG = 'weekend_stories_gas_config_v1';
 const STORAGE_KEY_ROSTER = 'kindergarten_roster_v1';
 
 export const INITIAL_ROSTER: RosterStudent[] = [
-  { id: 'roster-eunsol', name: '김은솔', className: '은솔1반', parentPin: '1234', note: '가상 원아 (학부모 참고 예시)' },
-  { id: 'roster-1', name: '김민준', className: '은솔1반', parentPin: '1234', note: '캠핑 및 야외 활동' },
-  { id: 'roster-2', name: '이서연', className: '은솔1반', parentPin: '1234', note: '시골 체험 및 식물' },
-  { id: 'roster-3', name: '박준우', className: '은솔1반', parentPin: '1234', note: '레고 및 블록 만들기' },
-  { id: 'roster-4', name: '최하은', className: '은솔1반', parentPin: '1234', note: '반려동물 및 독서' },
-  { id: 'roster-5', name: '정지후', className: '은솔1반', parentPin: '1234', note: '신체 운동 및 라이딩' }
+  { id: 'roster-eunsol', name: '김은솔', className: '은솔1반', parentPin: '1234', note: '가상 원아 (학부모 참고 예시)' }
 ];
+
+export function ensureRosterOrder(list: RosterStudent[]): RosterStudent[] {
+  if (!Array.isArray(list) || list.length === 0) return list;
+  const result = [...list];
+  const idxA = result.findIndex((s) => s.name === '안세은');
+  const idxB = result.findIndex((s) => s.name === '엄소율');
+
+  if (idxA !== -1 && idxB !== -1 && idxA > idxB) {
+    const [seEun] = result.splice(idxA, 1);
+    const newIdxB = result.findIndex((s) => s.name === '엄소율');
+    result.splice(newIdxB, 0, seEun);
+  }
+  return result;
+}
 
 export function getRosterList(): RosterStudent[] {
   try {
@@ -23,13 +32,19 @@ export function getRosterList(): RosterStudent[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
+      // Filter out legacy demo students (roster-1..5) unless user added them
+      const legacyDemoIds = new Set(['roster-1', 'roster-2', 'roster-3', 'roster-4', 'roster-5']);
+      const filtered = parsed.filter((s: RosterStudent) => !legacyDemoIds.has(s.id));
+
       // Ensure Eunsol student exists in roster
-      if (!parsed.some((s: any) => s.name === '김은솔')) {
-        const updated = [INITIAL_ROSTER[0], ...parsed];
+      if (!filtered.some((s: RosterStudent) => s.name === '김은솔')) {
+        const updated = ensureRosterOrder([INITIAL_ROSTER[0], ...filtered]);
         localStorage.setItem(STORAGE_KEY_ROSTER, JSON.stringify(updated));
         return updated;
       }
-      return parsed;
+      const ordered = ensureRosterOrder(filtered);
+      localStorage.setItem(STORAGE_KEY_ROSTER, JSON.stringify(ordered));
+      return ordered;
     }
     return INITIAL_ROSTER;
   } catch (e) {
@@ -40,7 +55,8 @@ export function getRosterList(): RosterStudent[] {
 
 export function saveRosterList(roster: RosterStudent[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY_ROSTER, JSON.stringify(roster));
+    const ordered = ensureRosterOrder(roster);
+    localStorage.setItem(STORAGE_KEY_ROSTER, JSON.stringify(ordered));
   } catch (e) {
     console.error('Failed to save roster list', e);
   }
@@ -63,14 +79,21 @@ export function getLocalStories(): StoryItem[] {
           : (item.imageUrl ? [item.imageUrl] : [])
       }));
 
-      // If Eunsol sample story is missing, insert it at front
-      if (!normalized.some((s: any) => s.studentName === '김은솔')) {
+      // Always sync Eunsol sample story images with latest default child photos
+      const eunsolIdx = normalized.findIndex((s: any) => s.id === 'demo-eunsol' || s.studentName === '김은솔');
+      if (eunsolIdx !== -1) {
+        normalized[eunsolIdx] = {
+          ...normalized[eunsolIdx],
+          imageUrls: INITIAL_STORIES[0].imageUrls,
+          imageCaptions: INITIAL_STORIES[0].imageCaptions
+        };
+        localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(normalized));
+        return normalized;
+      } else {
         const updated = [INITIAL_STORIES[0], ...normalized];
         localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(updated));
         return updated;
       }
-
-      return normalized;
     }
     return INITIAL_STORIES;
   } catch (e) {

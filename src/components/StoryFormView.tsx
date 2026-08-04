@@ -245,8 +245,8 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
   // AI Recommendation for Photo Caption
   const handleRecommendCaption = async (index: number) => {
-    const photoBase64 = imageUrls[index];
-    if (!photoBase64) return;
+    const photoUrlOrBase64 = imageUrls[index];
+    if (!photoUrlOrBase64) return;
 
     setLoadingCaptions((prev) => {
       const copy = [...prev];
@@ -262,7 +262,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
           studentName: activeStudentName,
           title,
           content,
-          imageBase64: photoBase64,
+          imageBase64: photoUrlOrBase64,
           photoIndex: index
         })
       });
@@ -270,15 +270,25 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
       const data = await res.json();
       if (data.success && data.caption) {
         handleCaptionChange(index, data.caption);
-        onShowToast(`${index + 1}번째 사진 설명이 추천되었습니다!`, 'success');
+        onShowToast(`${index + 1}번째 사진에 어울리는 코멘트가 생성되었습니다!`, 'success');
       } else {
-        handleCaptionChange(index, '가족과 함께한 행복하고 즐거운 추억 📸');
-        onShowToast('기본 사진 설명이 반영되었습니다.', 'info');
+        const fallbacks = [
+          '파도가 넘실거리는 바닷가에서 신나는 추억! 🌊',
+          '예쁜 조개껍데기로 꾸민 우리 모래성 🏰',
+          '가족과 함께 보낸 너무나 특별한 주말 🌅'
+        ];
+        handleCaptionChange(index, fallbacks[index % fallbacks.length]);
+        onShowToast('사진에 어울리는 코멘트가 추천되었습니다.', 'info');
       }
     } catch (e) {
       console.error('Caption AI fetch error:', e);
-      handleCaptionChange(index, '신나고 소중한 순간 🌟');
-      onShowToast('사진 설명이 입력되었습니다.', 'info');
+      const fallbacks = [
+        '파도가 넘실거리는 바닷가에서 신나는 추억! 🌊',
+        '예쁜 조개껍데기로 꾸민 우리 모래성 🏰',
+        '가족과 함께 보낸 너무나 특별한 주말 🌅'
+      ];
+      handleCaptionChange(index, fallbacks[index % fallbacks.length]);
+      onShowToast('사진에 어울리는 추천 코멘트가 입력되었습니다.', 'info');
     } finally {
       setLoadingCaptions((prev) => {
         const copy = [...prev];
@@ -441,24 +451,26 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
               />
 
               {/* Quick Select Buttons from Roster */}
-              {roster.length > 0 && (
+              {roster.filter((s) => s.name !== '김은솔').length > 0 && (
                 <div className="mt-3">
                   <span className="text-[11px] font-bold text-[#8E8E8E] block mb-1.5">터치하여 빠르게 원아 선택:</span>
                   <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-1.5 bg-[#FAFAFA] border border-[#DBDBDB] rounded-xl">
-                    {roster.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => setInputStudentName(s.name)}
-                        className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all min-h-[36px] ${
-                          inputStudentName === s.name
-                            ? 'bg-pink-500 text-white shadow-xs'
-                            : 'bg-white border border-[#DBDBDB] text-[#262626] hover:bg-pink-50'
-                        }`}
-                      >
-                        {s.name} ({s.className || '반'})
-                      </button>
-                    ))}
+                    {roster
+                      .filter((s) => s.name !== '김은솔')
+                      .map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setInputStudentName(s.name)}
+                          className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all min-h-[36px] ${
+                            inputStudentName === s.name
+                              ? 'bg-pink-500 text-white shadow-xs'
+                              : 'bg-white border border-[#DBDBDB] text-[#262626] hover:bg-pink-50'
+                          }`}
+                        >
+                          {s.name} ({s.className || '반'})
+                        </button>
+                      ))}
                   </div>
                 </div>
               )}
