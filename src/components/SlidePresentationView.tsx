@@ -42,6 +42,65 @@ interface SlidePresentationViewProps {
   onOpenAddModal?: () => void;
 }
 
+const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ photoUrl, studentName }) => {
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [photoUrl]);
+
+  if (photoUrl && !hasError) {
+    return (
+      <img
+        src={photoUrl}
+        alt=""
+        onError={() => setHasError(true)}
+        className="w-full h-full object-cover rounded-full"
+      />
+    );
+  }
+
+  const displayName = studentName.length >= 2 ? studentName.slice(-2) : studentName;
+
+  return (
+    <div className="w-full h-full rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-xs sm:text-sm font-extrabold select-none">
+      {displayName}
+    </div>
+  );
+};
+
+const SlidePhoto: React.FC<{
+  src: string;
+  alt: string;
+  style?: React.CSSProperties;
+  className?: string;
+}> = ({ src, alt, style, className }) => {
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [src]);
+
+  if (hasError || !src) {
+    return (
+      <div className="w-full h-full bg-[#141414] flex flex-col items-center justify-center p-6 text-center text-white/80">
+        <Sparkles className="w-12 h-12 text-pink-400 mb-3 animate-pulse" />
+        <span className="text-sm font-bold">{alt || '사진을 불러올 수 없습니다'}</span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      style={style}
+      className={className}
+      onError={() => setHasError(true)}
+    />
+  );
+};
+
 export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
   stories,
   selectedWeek,
@@ -79,6 +138,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
   const [modalDragStart, setModalDragStart] = useState({ x: 0, y: 0 });
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const slideCardRef = useRef<HTMLDivElement>(null);
 
   // Filter stories by selected week AND selected class
   const filteredStories = stories.filter((s) => {
@@ -314,7 +374,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
     return () => clearInterval(timer);
   }, [isPlaying, autoPlaySpeed, goToNext, totalSlides]);
 
-  // Toggle Fullscreen
+  // Toggle Fullscreen & Auto Scroll
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       containerRef.current?.requestFullscreen().catch(err => console.error(err));
@@ -323,14 +383,31 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
       document.exitFullscreen().catch(err => console.error(err));
       setIsFullscreen(false);
     }
+    setTimeout(() => {
+      slideCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
   };
 
   useEffect(() => {
     const onFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      const isFS = !!document.fullscreenElement;
+      setIsFullscreen(isFS);
+      if (isFS) {
+        setTimeout(() => {
+          slideCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 150);
+      }
     };
     document.addEventListener('fullscreenchange', onFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
+  // Auto Scroll down to slide card on mount
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      slideCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+    return () => clearTimeout(timer);
   }, []);
 
   const currentStory = filteredStories[currentIndex];
@@ -501,6 +578,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
         {/* Instagram Card Container */}
         <AnimatePresence custom={direction} mode="wait">
           <motion.div
+            ref={slideCardRef}
             key={currentStory.id}
             custom={direction}
             variants={slideVariants}
@@ -516,17 +594,10 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                 {/* Profile Avatar with Instagram Gradient Ring */}
                 <div className="p-[2.5px] rounded-full bg-gradient-to-tr from-[#f09433] via-[#dc2743] to-[#bc1888] shadow-xs">
                   <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-white p-0.5 overflow-hidden flex items-center justify-center">
-                    {currentStory.imageUrl ? (
-                      <img
-                        src={currentStory.imageUrl}
-                        alt={currentStory.studentName}
-                        className="w-full h-full object-cover rounded-full"
-                      />
-                    ) : (
-                      <div className="w-full h-full rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-sm font-extrabold">
-                        {currentStory.studentName.slice(0, 2)}
-                      </div>
-                    )}
+                    <SlideAvatar
+                      photoUrl={(currentStory.imageUrls && currentStory.imageUrls.length > 0) ? currentStory.imageUrls[0] : (currentStory.imageUrl || '')}
+                      studentName={currentStory.studentName}
+                    />
                   </div>
                 </div>
 
@@ -651,7 +722,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                       onTouchMove={handleTouchMove}
                       onTouchEnd={handleTouchEnd}
                     >
-                      <img
+                      <SlidePhoto
                         src={photos[0]}
                         alt={currentStory.title}
                         style={{
@@ -741,7 +812,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                         onTouchMove={handleTouchMove}
                         onTouchEnd={handleTouchEnd}
                       >
-                        <img
+                        <SlidePhoto
                           src={photos[photoSubIndex]}
                           alt={`${currentStory.title} - 사진 ${photoSubIndex + 1}`}
                           style={{
@@ -800,7 +871,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                                 setZoomedImage(imgUrl);
                               }}
                             >
-                              <img
+                              <SlidePhoto
                                 src={imgUrl}
                                 alt={`${currentStory.title} - 사진 ${imgIdx + 1}`}
                                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 pointer-events-none select-none"
@@ -889,15 +960,11 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
               {/* Post Caption & Content - Big Typography for Classroom TV */}
               <div className="text-sm sm:text-base lg:text-lg text-[#262626] leading-relaxed space-y-2 bg-gray-50/80 p-4 rounded-2xl border border-gray-100">
                 <p>
-                  <span className="font-black mr-2 text-black text-base sm:text-lg lg:text-xl">{currentStory.studentName}</span>
-                  <span className="font-extrabold text-pink-600 mr-2">[{currentStory.title}]</span>
-                </p>
-                <p className="whitespace-pre-wrap font-medium text-[#262626] leading-loose text-base sm:text-lg">
-                  {currentStory.content}
+                  <span className="font-black text-black text-base sm:text-lg lg:text-xl">{currentStory.studentName}</span>
                 </p>
 
                 {/* Hashtags */}
-                <p className="text-xs sm:text-sm font-bold text-sky-600 pt-2 space-x-2">
+                <p className="text-xs sm:text-sm font-bold text-sky-600 pt-1 space-x-2">
                   <span>#{studentClass}</span>
                   <span>#유치원주말지낸이야기</span>
                   <span>#{currentStory.studentName}의주말</span>
@@ -952,13 +1019,10 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
               }`}
             >
               <div className="w-full h-full rounded-full bg-white p-0.5 overflow-hidden">
-                {s.imageUrl ? (
-                  <img src={s.imageUrl} alt={s.studentName} className="w-full h-full object-cover rounded-full" />
-                ) : (
-                  <div className="w-full h-full bg-[#EFEFEF] flex items-center justify-center text-[10px] text-[#262626] font-bold">
-                    {s.studentName.slice(0, 2)}
-                  </div>
-                )}
+                <SlideAvatar
+                  photoUrl={(s.imageUrls && s.imageUrls.length > 0) ? s.imageUrls[0] : (s.imageUrl || '')}
+                  studentName={s.studentName}
+                />
               </div>
             </button>
           ))}
@@ -1050,7 +1114,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
               onMouseUp={() => setIsModalDragging(false)}
               onMouseLeave={() => setIsModalDragging(false)}
             >
-              <img
+              <SlidePhoto
                 src={zoomedImage}
                 alt="원본 확대 이미지"
                 style={{

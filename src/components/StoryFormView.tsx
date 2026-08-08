@@ -384,11 +384,6 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
   // Generate AI Gemini Reflection
   const handleGenerateAiComment = async () => {
-    if (!title.trim() && !content.trim()) {
-      onShowToast('이야기 제목과 내용을 먼저 입력해 주세요.', 'error');
-      return;
-    }
-
     setIsGeneratingAi(true);
     try {
       const response = await fetch('/api/gemini', {
@@ -396,8 +391,8 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           studentName: activeStudentName,
-          title,
-          content,
+          title: '',
+          content: '',
           week,
           imageBase64: imageUrls[0] || null
         })
@@ -424,12 +419,8 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
   // Submit / Save
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) {
-      onShowToast('이야기 제목을 입력해 주세요.', 'error');
-      return;
-    }
-    if (!content.trim()) {
-      onShowToast('주말에 지낸 이야기 내용을 입력해 주세요.', 'error');
+    if (imageUrls.length === 0) {
+      onShowToast('사진을 최소 1장 이상 선택해 주세요.', 'error');
       return;
     }
 
@@ -440,8 +431,8 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
         week,
         studentName: activeStudentName,
         parentPin: activeParentPin,
-        title: title.trim(),
-        content: content.trim(),
+        title: '',
+        content: '',
         imageUrls: imageUrls,
         imageCaptions: imageCaptions,
         imageUrl: imageUrls[0] || '',
@@ -692,12 +683,9 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                           사진 {photos.length}장 첨부
                         </span>
                       </div>
-                      <h4 className="text-sm font-extrabold text-[#262626] line-clamp-1">
-                        {story.title}
+                      <h4 className="text-sm font-extrabold text-[#262626]">
+                        {story.studentName} 어린이 이야기
                       </h4>
-                      <p className="text-xs text-[#737373] line-clamp-2 leading-relaxed">
-                        {story.content}
-                      </p>
                     </div>
 
                     {/* Right: Actions */}
@@ -961,44 +949,6 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                   ))}
                 </div>
               )}
-            </div>
-
-            {/* Post Title & Story Text Content (Instagram Caption Style) */}
-            <div className="p-4 sm:p-5 rounded-2xl bg-[#FAFAFA] border border-[#DBDBDB] space-y-4">
-              <div>
-                <label className="block text-xs font-extrabold text-[#262626] uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <MessageSquare className="w-4 h-4 text-pink-500" />
-                  <span>게시물 제목 <span className="text-pink-500">*</span></span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="예: 신나는 여름방학 동해 바다 체험과 우리가족 모래성 쌓기 🌊"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  className="w-full bg-white border border-[#DBDBDB] rounded-2xl px-4 py-3.5 text-base sm:text-xs font-extrabold text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 placeholder-[#8E8E8E] min-h-[46px] touch-manipulation"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-extrabold text-[#262626] uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Edit3 className="w-4 h-4 text-pink-500" />
-                  <span>이야기 피드 본문 내용 <span className="text-pink-500">*</span></span>
-                </label>
-                <textarea
-                  rows={5}
-                  placeholder="주말 동안 있었던 기억에 남는 경험, 활동, 아이가했던 재밌는 말이나 소감을 인스타그램 캡션처럼 자유롭게 적어주세요."
-                  value={content}
-                  onChange={(e) => setContent(e.target.value)}
-                  className="w-full bg-white border border-[#DBDBDB] rounded-2xl p-4 text-base sm:text-xs font-medium text-[#262626] focus:outline-none focus:ring-2 focus:ring-pink-500 placeholder-[#8E8E8E] leading-relaxed resize-y min-h-[120px] touch-manipulation"
-                />
-
-                <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-pink-600 font-extrabold">
-                  <span>#우리들의주말이야기</span>
-                  <span>#{activeStudentName}</span>
-                  <span>#{week.split('(')[0]}</span>
-                  <span>#Classgram</span>
-                </div>
-              </div>
             </div>
 
             {/* Instagram Bottom Action Row */}

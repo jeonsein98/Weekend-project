@@ -128,7 +128,7 @@ export const InstagramStoryBar: React.FC<InstagramStoryBarProps> = ({
                   key={story.id}
                   onClick={() => onSelectStudentStory && onSelectStudentStory(story.id)}
                   className="flex flex-col items-center gap-1.5 group cursor-pointer"
-                  title={`${story.studentName}의 이야기 (${story.title})`}
+                  title={`${story.studentName}의 이야기`}
                 >
                   <div
                     className={`p-[2px] rounded-full transition-all duration-300 ${

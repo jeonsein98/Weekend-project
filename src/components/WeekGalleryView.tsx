@@ -24,8 +24,8 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
     const matchesSearch =
       !searchQuery.trim() ||
       s.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.content.toLowerCase().includes(searchQuery.toLowerCase());
+      (s.title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.content || '').toLowerCase().includes(searchQuery.toLowerCase());
     return matchesWeek && matchesSearch;
   });
 
@@ -147,6 +147,10 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
                     <img
                       src={coverPhoto}
                       alt={story.title}
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80';
+                      }}
                       className="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-500"
                     />
                   ) : (
@@ -188,16 +192,6 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
-                </div>
-
-                {/* Details Footer */}
-                <div className="p-3 space-y-1.5">
-                  <p className="text-xs font-extrabold text-[#262626] line-clamp-1">
-                    {story.title}
-                  </p>
-                  <p className="text-[11px] text-[#737373] line-clamp-2 leading-relaxed font-normal">
-                    {story.content}
-                  </p>
                 </div>
 
               </div>
