@@ -29,58 +29,70 @@ export interface GasConfig {
 
 export const WEEKS_LIST = [
   "9월 1주차(방학지낸 이야기)",
-  "9월 2주차",
-  "9월 3주차",
-  "9월 4주차",
-  "10월 1주차",
-  "10월 2주차",
-  "10월 3주차",
-  "10월 4주차",
-  "11월 1주차",
-  "11월 2주차",
-  "11월 3주차",
-  "11월 4주차",
-  "12월 1주차",
-  "12월 2주차",
-  "12월 3주차",
-  // 12월 4주차부터 1월 한 달간 방학 제외
-  "2월 1주차(방학지낸 이야기)",
-  "2월 2주차"
+  "9/5~9/6",
+  "9/12~9/13",
+  "9/19~9/20",
+  "9/26~9/27",
+  "10/3~10/4",
+  "10/10~10/11",
+  "10/17~10/18",
+  "10/24~10/25",
+  "10/31~11/1",
+  "11/7~11/8",
+  "11/14~11/15",
+  "11/21~11/22",
+  "11/28~11/29",
+  "12/5~12/6",
+  "12/12~12/13",
+  "12/19~12/20",
+  "12/26~12/27",
+  "2월 1주차(방학지낸 이야기)"
 ];
 
 /**
- * 9월 1주차를 시작으로 오늘 날짜에 해당하는 주차를 자동으로 계산하여 반환
+ * 2026학년도 주말 일정 및 방학 주차를 기준으로 오늘 날짜에 해당하는 주차를 반환
  */
 export function getCurrentWeekString(now = new Date()): string {
   const month = now.getMonth() + 1; // 1 ~ 12
   const day = now.getDate();
 
-  let weekNum = Math.ceil(day / 7);
-  if (weekNum > 4) weekNum = 4;
-
-  let calculatedWeek = "9월 1주차(방학지낸 이야기)";
-
-  if (month === 9) {
-    calculatedWeek = weekNum === 1 ? "9월 1주차(방학지낸 이야기)" : `9월 ${weekNum}주차`;
-  } else if (month === 10) {
-    calculatedWeek = `10월 ${weekNum}주차`;
-  } else if (month === 11) {
-    calculatedWeek = `11월 ${weekNum}주차`;
-  } else if (month === 12) {
-    calculatedWeek = weekNum >= 3 ? "12월 3주차" : `12월 ${weekNum}주차`;
-  } else if (month === 1) {
-    calculatedWeek = "2월 1주차(방학지낸 이야기)";
-  } else if (month === 2) {
-    calculatedWeek = weekNum === 1 ? "2월 1주차(방학지낸 이야기)" : "2월 2주차";
-  } else {
-    // 3월 ~ 8월학기 준비 기간 -> 기본 9월 1주차
-    calculatedWeek = "9월 1주차(방학지낸 이야기)";
+  // 1월 ~ 2월: 겨울방학 지낸 이야기
+  if (month === 1 || month === 2) {
+    return "2월 1주차(방학지낸 이야기)";
   }
 
-  // WEEKS_LIST에 존재하는 값인지 검증
-  if (WEEKS_LIST.includes(calculatedWeek)) {
-    return calculatedWeek;
+  // 9월 첫 주 시작 전 (8월 또는 9월 4일 이전)
+  if (month < 9 || (month === 9 && day < 5)) {
+    return "9월 1주차(방학지낸 이야기)";
   }
+
+  // 2026년도 주말 날짜 매핑표 (토요일~일요일 주말 기준)
+  const weekendDates = [
+    { label: "9/5~9/6", m: 9, startD: 5, endD: 11 },
+    { label: "9/12~9/13", m: 9, startD: 12, endD: 18 },
+    { label: "9/19~9/20", m: 9, startD: 19, endD: 25 },
+    { label: "9/26~9/27", m: 9, startD: 26, endD: 30 },
+    { label: "10/3~10/4", m: 10, startD: 1, endD: 9 },
+    { label: "10/10~10/11", m: 10, startD: 10, endD: 16 },
+    { label: "10/17~10/18", m: 10, startD: 17, endD: 23 },
+    { label: "10/24~10/25", m: 10, startD: 24, endD: 30 },
+    { label: "10/31~11/1", m: 10, startD: 31, endD: 31 },
+    { label: "10/31~11/1", m: 11, startD: 1, endD: 6 },
+    { label: "11/7~11/8", m: 11, startD: 7, endD: 13 },
+    { label: "11/14~11/15", m: 11, startD: 14, endD: 20 },
+    { label: "11/21~11/22", m: 11, startD: 21, endD: 27 },
+    { label: "11/28~11/29", m: 11, startD: 28, endD: 30 },
+    { label: "12/5~12/6", m: 12, startD: 1, endD: 11 },
+    { label: "12/12~12/13", m: 12, startD: 12, endD: 18 },
+    { label: "12/19~12/20", m: 12, startD: 19, endD: 25 },
+    { label: "12/26~12/27", m: 12, startD: 26, endD: 31 },
+  ];
+
+  const matched = weekendDates.find(w => w.m === month && day >= w.startD && day <= w.endD);
+  if (matched && WEEKS_LIST.includes(matched.label)) {
+    return matched.label;
+  }
+
   return WEEKS_LIST[0];
 }
 

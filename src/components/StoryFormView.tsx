@@ -919,24 +919,9 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
                       {/* Photo Specific Caption Input */}
                       <div className="space-y-1.5 pt-1">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-extrabold text-[#737373]">
-                            사진 #{idx + 1} 설명 코멘트
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => handleRecommendCaption(idx)}
-                            disabled={loadingCaptions[idx]}
-                            className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-pink-50 hover:bg-pink-500 text-pink-600 hover:text-white text-[11px] font-extrabold transition-all border border-pink-200"
-                          >
-                            {loadingCaptions[idx] ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <Sparkles className="w-3 h-3 fill-current text-pink-500" />
-                            )}
-                            <span>AI 추천</span>
-                          </button>
-                        </div>
+                        <label className="block text-xs font-extrabold text-[#737373]">
+                          사진 #{idx + 1} 설명 코멘트
+                        </label>
                         <input
                           type="text"
                           placeholder="예: 바닷가에서 모래성 쌓는 중! 🏰"
