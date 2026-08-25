@@ -30,6 +30,9 @@ import {
 } from 'lucide-react';
 import { StoryItem, RosterStudent, WEEKS_LIST } from '../types';
 import { InstagramStoryBar } from './InstagramStoryBar';
+import eunsolBeachLaugh from '../assets/images/eunsol_beach_laugh_1786166395268.jpg';
+import eunsolSandcastle from '../assets/images/eunsol_sandcastle_1786166415943.jpg';
+import eunsolFamilySunset from '../assets/images/eunsol_family_sunset_1786166439449.jpg';
 
 interface SlidePresentationViewProps {
   stories: StoryItem[];
@@ -43,18 +46,26 @@ interface SlidePresentationViewProps {
 }
 
 const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ photoUrl, studentName }) => {
+  const [currentUrl, setCurrentUrl] = useState(photoUrl);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
+    setCurrentUrl(photoUrl);
     setHasError(false);
   }, [photoUrl]);
 
-  if (photoUrl && !hasError) {
+  if (currentUrl && !hasError) {
     return (
       <img
-        src={photoUrl}
+        src={currentUrl}
         alt=""
-        onError={() => setHasError(true)}
+        onError={() => {
+          if (currentUrl !== eunsolBeachLaugh) {
+            setCurrentUrl(eunsolBeachLaugh);
+          } else {
+            setHasError(true);
+          }
+        }}
         className="w-full h-full object-cover rounded-full"
       />
     );
@@ -69,19 +80,45 @@ const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ pho
   );
 };
 
+const DEFAULT_FALLBACK_IMAGES = [
+  eunsolBeachLaugh,
+  eunsolSandcastle,
+  eunsolFamilySunset,
+  '/eunsol_beach_laugh.jpg',
+  '/eunsol_sandcastle.jpg',
+  '/eunsol_family_sunset.jpg'
+];
+
 const SlidePhoto: React.FC<{
   src: string;
   alt: string;
   style?: React.CSSProperties;
   className?: string;
-}> = ({ src, alt, style, className }) => {
+  fallbackIndex?: number;
+}> = ({ src, alt, style, className, fallbackIndex = 0 }) => {
+  const [currentSrc, setCurrentSrc] = useState(src);
+  const [fallbackAttempt, setFallbackAttempt] = useState(0);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
+    setCurrentSrc(src);
     setHasError(false);
+    setFallbackAttempt(0);
   }, [src]);
 
-  if (hasError || !src) {
+  const handleError = () => {
+    if (fallbackAttempt < DEFAULT_FALLBACK_IMAGES.length) {
+      const nextFallback = DEFAULT_FALLBACK_IMAGES[(fallbackIndex + fallbackAttempt) % DEFAULT_FALLBACK_IMAGES.length];
+      setFallbackAttempt((prev) => prev + 1);
+      if (currentSrc !== nextFallback) {
+        setCurrentSrc(nextFallback);
+        return;
+      }
+    }
+    setHasError(true);
+  };
+
+  if (hasError || !currentSrc) {
     return (
       <div className="w-full h-full bg-[#141414] flex flex-col items-center justify-center p-6 text-center text-white/80">
         <Sparkles className="w-12 h-12 text-pink-400 mb-3 animate-pulse" />
@@ -92,11 +129,11 @@ const SlidePhoto: React.FC<{
 
   return (
     <img
-      src={src}
+      src={currentSrc}
       alt={alt}
       style={style}
       className={className}
-      onError={() => setHasError(true)}
+      onError={handleError}
     />
   );
 };
@@ -873,7 +910,8 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                             >
                               <SlidePhoto
                                 src={imgUrl}
-                                alt={`${currentStory.title} - 사진 ${imgIdx + 1}`}
+                                alt={`${currentStory.studentName} - 사진 ${imgIdx + 1}`}
+                                fallbackIndex={imgIdx}
                                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 pointer-events-none select-none"
                               />
                               <span className="absolute top-3 left-3 bg-black/80 backdrop-blur-md text-white text-xs sm:text-sm font-black px-3 py-1 rounded-full border border-white/20 shadow-md z-10">

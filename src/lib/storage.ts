@@ -65,15 +65,34 @@ export function getLocalStories(): StoryItem[] {
       const legacyDemoIds = new Set(['demo-1', 'demo-2', 'demo-3', 'demo-4']);
       const legacyDemoNames = new Set(['김민준', '이서연', '박준우', '최하은']);
 
-      // Normalize stories & filter out legacy demo items
+      // Normalize stories & filter out legacy demo items, replace unsplash URLs if any
+      const DEFAULT_LOCAL_PHOTOS = INITIAL_STORIES[0]?.imageUrls || [
+        '/eunsol_beach_laugh.jpg',
+        '/eunsol_sandcastle.jpg',
+        '/eunsol_family_sunset.jpg'
+      ];
+
       const normalized = parsed
         .filter((item: any) => !legacyDemoIds.has(item.id) && !legacyDemoNames.has(item.studentName))
-        .map((item: any) => ({
-          ...item,
-          imageUrls: item.imageUrls && Array.isArray(item.imageUrls) && item.imageUrls.length > 0
+        .map((item: any) => {
+          let urls = item.imageUrls && Array.isArray(item.imageUrls) && item.imageUrls.length > 0
             ? item.imageUrls
-            : (item.imageUrl ? [item.imageUrl] : [])
-        }));
+            : (item.imageUrl ? [item.imageUrl] : []);
+
+          // Replace old unsplash URLs if present
+          urls = urls.map((url: string, idx: number) => {
+            if (typeof url === 'string' && (url.includes('unsplash.com') || url.trim() === '')) {
+              return DEFAULT_LOCAL_PHOTOS[idx % DEFAULT_LOCAL_PHOTOS.length];
+            }
+            return url;
+          });
+
+          return {
+            ...item,
+            imageUrl: urls[0] || DEFAULT_LOCAL_PHOTOS[0],
+            imageUrls: urls
+          };
+        });
 
       // Always sync Eunsol sample story images with latest default child photos
       const eunsolIdx = normalized.findIndex((s: any) => s.id === 'demo-eunsol' || s.studentName === '김은솔');

@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { RosterStudent, StoryItem } from '../types';
 import { Users, Sparkles, UserCheck } from 'lucide-react';
+import eunsolBeachLaugh from '../assets/images/eunsol_beach_laugh_1786166395268.jpg';
 
 interface InstagramStoryBarProps {
   stories: StoryItem[];
@@ -13,14 +14,26 @@ interface InstagramStoryBarProps {
 }
 
 const StudentStoryAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ photoUrl, studentName }) => {
-  const [hasError, setHasError] = React.useState(false);
+  const [currentUrl, setCurrentUrl] = useState(photoUrl);
+  const [hasError, setHasError] = useState(false);
 
-  if (photoUrl && !hasError) {
+  useEffect(() => {
+    setCurrentUrl(photoUrl);
+    setHasError(false);
+  }, [photoUrl]);
+
+  if (currentUrl && !hasError) {
     return (
       <img
-        src={photoUrl}
+        src={currentUrl}
         alt=""
-        onError={() => setHasError(true)}
+        onError={() => {
+          if (currentUrl !== eunsolBeachLaugh) {
+            setCurrentUrl(eunsolBeachLaugh);
+          } else {
+            setHasError(true);
+          }
+        }}
         className="w-full h-full object-cover rounded-full"
       />
     );

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Presentation, Trash2, Search, Sparkles, Heart, Filter, MessageCircle, CheckCircle2 } from 'lucide-react';
 import { StoryItem, WEEKS_LIST } from '../types';
+import eunsolBeachLaugh from '../assets/images/eunsol_beach_laugh_1786166395268.jpg';
 
 interface WeekGalleryViewProps {
   stories: StoryItem[];
@@ -149,7 +150,7 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
                       alt={story.title}
                       onError={(e) => {
                         e.currentTarget.onerror = null;
-                        e.currentTarget.src = 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80';
+                        e.currentTarget.src = eunsolBeachLaugh;
                       }}
                       className="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-500"
                     />
