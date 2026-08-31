@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RosterStudent, StoryItem } from '../types';
+import { RosterStudent, StoryItem, isWeekMatch } from '../types';
 import { Users, Sparkles, UserCheck } from 'lucide-react';
 import eunsolBeachLaugh from '../assets/images/eunsol_beach_laugh_1786166395268.jpg';
 
@@ -67,7 +67,7 @@ export const InstagramStoryBar: React.FC<InstagramStoryBarProps> = ({
   );
 
   // Get stories for current week or overall
-  const weekStories = stories.filter((s) => selectedWeek === '전체' || s.week === selectedWeek);
+  const weekStories = stories.filter((s) => selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek));
 
   return (
     <div className="w-full bg-white border-b border-[#DBDBDB] py-3.5 px-4 overflow-x-auto no-scrollbar shadow-2xs select-none">

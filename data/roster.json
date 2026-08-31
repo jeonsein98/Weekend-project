@@ -1,0 +1,16 @@
+[
+  {
+    "id": "roster-eunsol",
+    "name": "김은솔",
+    "className": "은솔1반",
+    "parentPin": "1234",
+    "note": "가상 원아 (학부모 참고 예시)"
+  },
+  {
+    "id": "roster-dohee",
+    "name": "김도희",
+    "className": "은솔1반",
+    "parentPin": "1234",
+    "note": "학부모 사진 업로드 확인 필요"
+  }
+]

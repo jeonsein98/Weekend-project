@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Presentation, Trash2, Search, Sparkles, Heart, Filter, MessageCircle, CheckCircle2 } from 'lucide-react';
-import { StoryItem, WEEKS_LIST } from '../types';
+import { StoryItem, WEEKS_LIST, isWeekMatch } from '../types';
+import { WeekTabBar } from './WeekTabBar';
 import eunsolBeachLaugh from '../assets/images/eunsol_beach_laugh_1786166395268.jpg';
 
 interface WeekGalleryViewProps {
@@ -21,7 +22,7 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
 
   const filteredStories = stories.filter((s) => {
-    const matchesWeek = selectedWeek === '전체' || s.week === selectedWeek;
+    const matchesWeek = selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek);
     const matchesSearch =
       !searchQuery.trim() ||
       s.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -32,6 +33,14 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto py-6 sm:py-8 px-4">
+      {/* Week Date Tabs Bar (날짜탭) */}
+      <WeekTabBar
+        selectedWeek={selectedWeek}
+        onSelectWeek={setSelectedWeek}
+        stories={stories}
+        className="rounded-2xl border mb-6 shadow-2xs"
+      />
+
       {/* Instagram Profile-style Header Controls */}
       <div className="bg-white border border-[#DBDBDB] rounded-3xl p-5 sm:p-6 mb-6 text-[#262626] flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 shadow-2xs">
         
@@ -66,7 +75,7 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
             >
               <option value="전체" className="bg-white text-[#262626]">전체 주차 ({stories.length}건)</option>
               {WEEKS_LIST.map((w) => {
-                const count = stories.filter((s) => s.week === w).length;
+                const count = stories.filter((s) => isWeekMatch(s.week, w)).length;
                 return (
                   <option key={w} value={w} className="bg-white text-[#262626]">
                     {w} ({count}건)
@@ -105,9 +114,19 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
 
       {/* Stories Grid */}
       {filteredStories.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-3xl border border-[#DBDBDB] text-[#737373]">
-          <p className="font-extrabold text-base text-[#262626] mb-1">일치하는 이야기 게시물이 없습니다.</p>
-          <p className="text-xs">주차 필터를 변경하거나 새로운 게시물을 등록해 보세요.</p>
+        <div className="text-center py-16 bg-white rounded-3xl border border-[#DBDBDB] text-[#737373] p-6">
+          <p className="font-extrabold text-base text-[#262626] mb-1">
+            {selectedWeek === '전체' ? '일치하는 이야기 게시물이 없습니다.' : `'${selectedWeek}'에 등록된 이야기가 없습니다.`}
+          </p>
+          <p className="text-xs mb-4">주차 필터를 변경하거나 새로운 게시물을 등록해 보세요.</p>
+          {stories.length > 0 && selectedWeek !== '전체' && (
+            <button
+              onClick={() => setSelectedWeek('전체')}
+              className="px-5 py-2 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 text-white text-xs font-black shadow-xs hover:opacity-90 transition-all active:scale-95 cursor-pointer"
+            >
+              전체 주차 이야기 보기 (총 {stories.length}건)
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">

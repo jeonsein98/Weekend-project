@@ -28,8 +28,9 @@ import {
   MoreHorizontal,
   CheckCircle2
 } from 'lucide-react';
-import { StoryItem, RosterStudent, WEEKS_LIST } from '../types';
+import { StoryItem, RosterStudent, WEEKS_LIST, isWeekMatch } from '../types';
 import { InstagramStoryBar } from './InstagramStoryBar';
+import { WeekTabBar } from './WeekTabBar';
 import eunsolBeachLaugh from '../assets/images/eunsol_beach_laugh_1786166395268.jpg';
 import eunsolSandcastle from '../assets/images/eunsol_sandcastle_1786166415943.jpg';
 import eunsolFamilySunset from '../assets/images/eunsol_family_sunset_1786166439449.jpg';
@@ -179,7 +180,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
 
   // Filter stories by selected week AND selected class
   const filteredStories = stories.filter((s) => {
-    const matchesWeek = selectedWeek === '전체' || s.week === selectedWeek;
+    const matchesWeek = selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek);
     
     const studentMatch = roster.find(
       (r) => r.name.trim().toLowerCase() === s.studentName.trim().toLowerCase()
@@ -478,6 +479,13 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
           setSelectedClass={setSelectedClass}
           selectedWeek={selectedWeek}
         />
+        {setSelectedWeek && (
+          <WeekTabBar
+            selectedWeek={selectedWeek}
+            onSelectWeek={setSelectedWeek}
+            stories={stories}
+          />
+        )}
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
           <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-[#f09433] via-[#dc2743] to-[#bc1888] p-[2px] mb-4 shadow-sm">
             <div className="w-full h-full rounded-full bg-white flex items-center justify-center text-[#dc2743]">
@@ -487,9 +495,23 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
           <h3 className="text-xl font-black text-[#262626] mb-2">
             {selectedWeek === '전체' ? '등록된 이야기 게시물이 없습니다.' : `${selectedWeek}에 등록된 이야기가 없습니다.`}
           </h3>
-          <p className="text-[#737373] max-w-md text-xs sm:text-sm mb-6 leading-relaxed">
+          <p className="text-[#737373] max-w-md text-xs sm:text-sm mb-4 leading-relaxed">
             상단의 '게시물 작성' 버튼을 눌러 우리 아이의 주말 일상을 인스타그램 피드처럼 공유해보세요!
           </p>
+
+          {stories.length > 0 && selectedWeek !== '전체' && (
+            <div className="mt-2 flex flex-col items-center gap-2">
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3.5 py-1.5 rounded-full font-bold">
+                💡 다른 주차에 등록된 이야기가 총 {stories.length}건 있습니다!
+              </p>
+              <button
+                onClick={() => setSelectedWeek && setSelectedWeek('전체')}
+                className="mt-1 px-5 py-2 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 text-white text-xs font-black shadow-xs hover:opacity-90 transition-all active:scale-95 cursor-pointer"
+              >
+                전체 주차 이야기 보기 (총 {stories.length}건)
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -526,6 +548,15 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
         }}
         currentStoryId={currentStory?.id}
       />
+
+      {/* Week Date Tabs Bar (날짜탭) */}
+      {setSelectedWeek && (
+        <WeekTabBar
+          selectedWeek={selectedWeek}
+          onSelectWeek={setSelectedWeek}
+          stories={stories}
+        />
+      )}
 
       {/* Control Top Bar */}
       <div className="max-w-4xl mx-auto w-full px-4 pt-4 flex flex-wrap items-center justify-between gap-3 text-xs">

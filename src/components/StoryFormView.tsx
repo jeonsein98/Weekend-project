@@ -18,7 +18,8 @@ import {
   FolderOpen,
   MessageSquare
 } from 'lucide-react';
-import { StoryItem, WEEKS_LIST, RosterStudent, getCurrentWeekString } from '../types';
+import { StoryItem, WEEKS_LIST, RosterStudent, getCurrentWeekString, isWeekMatch } from '../types';
+import { saveDraftToIndexedDB, getDraftFromIndexedDB, clearDraftFromIndexedDB } from '../lib/idb';
 
 interface StoryFormViewProps {
   selectedWeek: string;
@@ -60,6 +61,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
   const [aiComment, setAiComment] = useState('');
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
 
@@ -136,10 +138,39 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
     (s) => s.studentName.trim().toLowerCase() === activeStudentName.trim().toLowerCase()
   );
 
+  // Auto-restore any previously attached photos/draft if user had to leave or reloaded
+  useEffect(() => {
+    if (activeStudentName && !editingStoryId) {
+      getDraftFromIndexedDB(activeStudentName).then((draft) => {
+        if (draft && draft.imageUrls && draft.imageUrls.length > 0) {
+          setImageUrls(draft.imageUrls);
+          setImageCaptions(draft.imageCaptions || draft.imageUrls.map(() => ''));
+          if (draft.week) setWeek(draft.week);
+          if (draft.aiComment) setAiComment(draft.aiComment);
+          setIsFormOpen(true);
+          onShowToast(`${activeStudentName} 어린이의 이전에 작성 중이던 사진과 내용이 안전하게 복원되었습니다!`, 'info');
+        }
+      }).catch((e) => console.warn('Draft restore notice:', e));
+    }
+  }, [activeStudentName]);
+
+  // Auto-save draft when photos or captions change
+  useEffect(() => {
+    if (activeStudentName && !editingStoryId && imageUrls.length > 0) {
+      saveDraftToIndexedDB(activeStudentName, {
+        week,
+        imageUrls,
+        imageCaptions,
+        aiComment
+      }).catch(() => {});
+    }
+  }, [activeStudentName, editingStoryId, imageUrls, imageCaptions, week, aiComment]);
+
   // Open Form to Edit existing story
   const handleStartEditStory = (story: StoryItem) => {
     setEditingStoryId(story.id);
-    setWeek(story.week);
+    const matchedWeek = WEEKS_LIST.find((w) => isWeekMatch(w, story.week)) || story.week;
+    setWeek(matchedWeek);
     setTitle(story.title);
     setContent(story.content);
     const existingImages = story.imageUrls && story.imageUrls.length > 0
@@ -250,19 +281,44 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
       return;
     }
 
+    setIsUploadingPhoto(true);
     let addedCount = 0;
-    for (const file of fileArray) {
-      if (imageUrls.length + addedCount >= 3) break;
-      const dataUrl = await compressMobilePhoto(file);
-      if (dataUrl) {
-        setImageUrls((prev) => (prev.length >= 3 ? prev : [...prev, dataUrl]));
-        setImageCaptions((prev) => (prev.length >= 3 ? prev : [...prev, '']));
-        addedCount++;
+    try {
+      for (const file of fileArray) {
+        if (imageUrls.length + addedCount >= 3) break;
+        const dataUrl = await compressMobilePhoto(file);
+        if (dataUrl) {
+          let finalUrl = dataUrl;
+          try {
+            const uploadRes = await fetch('/api/upload-photo', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                imageBase64: dataUrl,
+                name: `photo_${activeStudentName || 'child'}`
+              })
+            });
+            if (uploadRes.ok) {
+              const uploadData = await uploadRes.json();
+              if (uploadData.url) {
+                finalUrl = uploadData.url;
+              }
+            }
+          } catch (uploadErr) {
+            console.warn('Direct upload fallback:', uploadErr);
+          }
+
+          setImageUrls((prev) => (prev.length >= 3 ? prev : [...prev, finalUrl]));
+          setImageCaptions((prev) => (prev.length >= 3 ? prev : [...prev, '']));
+          addedCount++;
+        }
       }
+    } finally {
+      setIsUploadingPhoto(false);
     }
 
     if (addedCount > 0) {
-      onShowToast(`${addedCount}장의 사진이 성공적으로 업로드되었습니다.`, 'success');
+      onShowToast(`${addedCount}장의 사진이 첨부되었습니다! 맨 아래 [Instagram 스타일 게시하기] 버튼을 꼭 눌러주세요.`, 'info');
     }
   };
 
@@ -440,10 +496,13 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
         reactions: { '❤️': 0, '👏': 0, '⭐': 0, '😊': 0 }
       });
 
+      // Clear local draft upon successful submission
+      clearDraftFromIndexedDB(activeStudentName).catch(() => {});
+
       onShowToast(
         editingStoryId
           ? `${activeStudentName} 어린이의 이야기가 수정되었습니다!`
-          : `${activeStudentName} 어린이의 주말 이야기가 등록되었습니다!`,
+          : `${activeStudentName} 어린이의 주말 이야기와 사진이 성공적으로 등록되었습니다!`,
         'success'
       );
 
@@ -815,9 +874,14 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
               {/* Photo Upload Guidance Notice */}
               <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-50 via-orange-50 to-pink-50 border border-amber-200/80 text-amber-900 text-xs font-bold leading-relaxed flex items-start gap-2.5 shadow-2xs">
                 <ImageIcon className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <span>
-                  <strong>사진 업로드 안내:</strong> 유치원 발표 시 아이가 더 자신감 있게 발표할 수 있도록 <u className="text-pink-700 decoration-pink-400 font-extrabold">최대한 아이의 얼굴이 잘 보이고 장소가 잘 드러나는 사진</u>을 첨부해 주세요!
-                </span>
+                <div className="space-y-1">
+                  <p>
+                    <strong>사진 업로드 안내:</strong> 유치원 발표 시 아이가 더 자신감 있게 발표할 수 있도록 <u className="text-pink-700 decoration-pink-400 font-extrabold">최대한 아이의 얼굴이 잘 보이고 장소가 잘 드러나는 사진</u>을 첨부해 주세요!
+                  </p>
+                  <p className="text-[11px] text-pink-700 font-semibold flex items-center gap-1 mt-0.5">
+                    <span>🔒</span> 학부모님이 올리신 사진과 이야기는 서버에 영구 보존되며, 직접 삭제하기 전까지 안전하게 유지됩니다.
+                  </p>
+                </div>
               </div>
 
               {/* Upload Drop Zone if < 3 photos */}
@@ -826,12 +890,12 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => !isUploadingPhoto && fileInputRef.current?.click()}
                   className={`border-2 border-dashed rounded-2xl sm:rounded-3xl p-5 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer touch-manipulation active:scale-[0.99] ${
                     dragActive
                       ? 'border-pink-500 bg-pink-50/50'
                       : 'border-[#DBDBDB] bg-[#FAFAFA] hover:bg-[#F5F5F5] hover:border-pink-400'
-                  }`}
+                  } ${isUploadingPhoto ? 'opacity-70 cursor-wait' : ''}`}
                 >
                   <input
                     ref={fileInputRef}
@@ -839,6 +903,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                     type="file"
                     accept="image/*"
                     multiple
+                    disabled={isUploadingPhoto}
                     onChange={(e) => {
                       if (e.target.files) handleFilesAdd(e.target.files);
                       e.target.value = ''; // Reset input to allow re-selecting same photo if needed
@@ -848,14 +913,18 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                   <div className="flex flex-col items-center gap-2 w-full pointer-events-none">
                     <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-tr from-purple-600 via-pink-500 to-amber-500 p-0.5 text-white flex items-center justify-center shadow-md">
                       <div className="w-full h-full rounded-full bg-white flex items-center justify-center text-pink-500">
-                        <Upload className="w-5 h-5 sm:w-6 sm:h-6" />
+                        {isUploadingPhoto ? (
+                          <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 animate-spin" />
+                        ) : (
+                          <Upload className="w-5 h-5 sm:w-6 sm:h-6" />
+                        )}
                       </div>
                     </div>
                     <span className="text-xs sm:text-sm font-extrabold text-[#262626] mt-1">
-                      터치하여 스마트폰 사진 올리기 (현재 {imageUrls.length}/3장)
+                      {isUploadingPhoto ? '사진을 서버에 안전하게 영구 저장 중...' : `터치하여 스마트폰 사진 올리기 (현재 ${imageUrls.length}/3장)`}
                     </span>
                     <span className="text-[11px] text-[#8E8E8E]">
-                      스마트폰 앨범에서 우리 아이 최고 선명한 사진을 선택하세요
+                      {isUploadingPhoto ? '잠시만 기다려 주세요...' : '스마트폰 앨범에서 우리 아이 최고 선명한 사진을 선택하세요'}
                     </span>
                   </div>
                 </div>
@@ -935,6 +1004,16 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Notice banner before submit */}
+            {imageUrls.length > 0 && (
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl flex items-center gap-2.5 text-xs text-amber-900 font-bold mb-3 shadow-2xs">
+                <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  사진 {imageUrls.length}장이 준비되었습니다! 아래의 <strong>[Instagram 스타일 게시하기]</strong> 버튼을 꼭 눌러주셔야 학급 게시판과 발표 슬라이드에 최종 등록됩니다.
+                </span>
+              </div>
+            )}
 
             {/* Instagram Bottom Action Row */}
             <div className="pt-3 border-t border-[#EFEFEF] flex flex-col-reverse sm:flex-row items-center justify-between gap-2.5">

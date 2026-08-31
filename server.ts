@@ -11,8 +11,150 @@ const app = express();
 const PORT = 3000;
 
 // Increase body payload limit for image base64 uploads
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ limit: '25mb', extended: true }));
+app.use(express.json({ limit: '35mb' }));
+app.use(express.urlencoded({ limit: '35mb', extended: true }));
+
+// Persistent Storage Directories
+const DATA_DIR = path.join(process.cwd(), 'data');
+const STORIES_FILE = path.join(DATA_DIR, 'stories.json');
+const STORIES_BACKUP_FILE = path.join(DATA_DIR, 'stories.backup.json');
+const ROSTER_FILE = path.join(DATA_DIR, 'roster.json');
+const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
+
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// Statically serve uploaded photos so they load lightning fast & permanently
+app.use('/uploads', express.static(UPLOADS_DIR));
+
+const DEFAULT_INITIAL_STORIES = [
+  {
+    id: 'demo-eunsol',
+    week: '9월 1주차(방학지낸이야기)',
+    studentName: '김은솔',
+    parentPin: '1234',
+    title: '신나는 여름방학 동해 바다 체험과 우리가족 모래성 쌓기',
+    content: '안녕하세요! 은솔이네 가족의 즐거웠던 여름방학 주말 이야기입니다.\n\n방학 동안 은솔이와 함께 동해 바다로 여름 휴가를 다녀왔어요. 바닷가에서 맑은 파도 소리도 듣고, 아빠 엄마와 힘을 합쳐 커다란 인어공주 모래성도 만들었답니다. 조개껍데기를 주워서 모래성을 예쁘게 꾸미는 동안 은솔이 얼굴에 웃음꽃이 피어났어요. 저녁에는 신선한 해산물도 맛있게 먹고 밤하늘의 반짝이는 별도 관찰하며 소중한 추억을 가득 쌓았습니다.\n\n우리 유치원 친구들도 방학 동안 모두 건강하고 즐겁게 보냈기를 바라요! 💕',
+    imageUrls: [
+      '/uploads/eunsol_beach_laugh.jpg',
+      '/uploads/eunsol_sandcastle.jpg',
+      '/uploads/eunsol_family_sunset.jpg'
+    ],
+    imageCaptions: [
+      '파도가 넘실거리는 에메랄드빛 동해 바닷가에서 찰칵! 🌊',
+      '조개껍데기로 예쁘게 꾸민 커다란 모래성 앞에서 포즈 🏰',
+      '노을 지는 해변을 걸으며 가족과 함께 나누는 소중한 행복 🌅'
+    ],
+    aiComment: '자연 속에서 가족과의 따뜻한 사랑과 협동심을 배운 최고의 여름방학 이야기입니다! 조개껍데기로 꾸민 모래성이 정말 동화 속 풍경 같아요. ✨🐚🌊',
+    createdAt: new Date().toISOString(),
+    reactions: { '❤️': 24, '👏': 18, '⭐': 15 }
+  }
+];
+
+const DEFAULT_INITIAL_ROSTER = [
+  { id: 'roster-eunsol', name: '김은솔', className: '은솔1반', parentPin: '1234', note: '가상 원아 (학부모 참고 예시)' }
+];
+
+function readStories(): any[] {
+  try {
+    if (fs.existsSync(STORIES_FILE)) {
+      const data = fs.readFileSync(STORIES_FILE, 'utf-8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Error reading stories file, checking backup:', err);
+    try {
+      if (fs.existsSync(STORIES_BACKUP_FILE)) {
+        const backupData = fs.readFileSync(STORIES_BACKUP_FILE, 'utf-8');
+        return JSON.parse(backupData);
+      }
+    } catch (bErr) {
+      console.error('Backup read failed:', bErr);
+    }
+  }
+  writeStories(DEFAULT_INITIAL_STORIES);
+  return DEFAULT_INITIAL_STORIES;
+}
+
+function writeStories(stories: any[]): boolean {
+  try {
+    const jsonStr = JSON.stringify(stories, null, 2);
+    fs.writeFileSync(STORIES_FILE, jsonStr, 'utf-8');
+    fs.writeFileSync(STORIES_BACKUP_FILE, jsonStr, 'utf-8');
+    return true;
+  } catch (err) {
+    console.error('Failed to write stories to disk:', err);
+    return false;
+  }
+}
+
+function readRoster(): any[] {
+  try {
+    if (fs.existsSync(ROSTER_FILE)) {
+      const data = fs.readFileSync(ROSTER_FILE, 'utf-8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to read roster:', err);
+  }
+  writeRoster(DEFAULT_INITIAL_ROSTER);
+  return DEFAULT_INITIAL_ROSTER;
+}
+
+function writeRoster(roster: any[]): boolean {
+  try {
+    fs.writeFileSync(ROSTER_FILE, JSON.stringify(roster, null, 2), 'utf-8');
+    return true;
+  } catch (err) {
+    console.error('Failed to write roster:', err);
+    return false;
+  }
+}
+
+function saveBase64Image(base64Str: string, prefix = 'photo'): string {
+  if (!base64Str || typeof base64Str !== 'string') return '';
+  if (!base64Str.startsWith('data:image/')) {
+    return base64Str;
+  }
+  try {
+    const matches = base64Str.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+    if (!matches || matches.length < 3) {
+      return base64Str;
+    }
+    let ext = matches[1].toLowerCase();
+    if (ext === 'jpeg') ext = 'jpg';
+    if (ext === 'svg+xml') ext = 'svg';
+
+    const buffer = Buffer.from(matches[2], 'base64');
+    const safePrefix = prefix.replace(/[^a-zA-Z0-9가-힣_-]/g, '_');
+    const filename = `${safePrefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+    fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+    return `/uploads/${filename}`;
+  } catch (err) {
+    console.error('Error saving image to disk:', err);
+    return base64Str;
+  }
+}
+
+function processStoryImages(story: any): any {
+  const cloned = { ...story };
+  let urls = Array.isArray(cloned.imageUrls) ? [...cloned.imageUrls] : (cloned.imageUrl ? [cloned.imageUrl] : []);
+  urls = urls.map((url: string, idx: number) => {
+    if (typeof url === 'string' && url.startsWith('data:image/')) {
+      return saveBase64Image(url, `story_${cloned.studentName || 'child'}_${idx + 1}`);
+    }
+    return url;
+  });
+  cloned.imageUrls = urls;
+  cloned.imageUrl = urls[0] || '';
+  return cloned;
+}
 
 // Initialize Gemini API client on the server side
 function getGeminiClient() {
@@ -213,6 +355,225 @@ app.post('/api/gemini-caption-recommendation', async (req, res) => {
       success: true,
       caption: '주말 동안 찍은 참 소중하고 예쁜 추억 🌟'
     });
+  }
+});
+
+// --- Persistent Stories & Photo APIs ---
+
+// 1. Get all stories
+app.get('/api/stories', (_req, res) => {
+  try {
+    const stories = readStories();
+    res.json({ success: true, stories });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. Save or update a story (stores photos permanently on disk)
+app.post('/api/stories', (req, res) => {
+  try {
+    const storyData = req.body;
+    if (!storyData || !storyData.studentName) {
+      return res.status(400).json({ success: false, error: '원아 이름이 필요합니다.' });
+    }
+
+    const currentStories = readStories();
+    const processedStory = processStoryImages(storyData);
+    let updatedStories: any[];
+
+    if (processedStory.id) {
+      const idx = currentStories.findIndex((s: any) => s.id === processedStory.id);
+      if (idx !== -1) {
+        currentStories[idx] = {
+          ...currentStories[idx],
+          ...processedStory,
+          updatedAt: new Date().toISOString()
+        };
+        updatedStories = currentStories;
+      } else {
+        processedStory.createdAt = processedStory.createdAt || new Date().toISOString();
+        updatedStories = [processedStory, ...currentStories];
+      }
+    } else {
+      // Check if story already exists for this student and week
+      const existingIdx = currentStories.findIndex(
+        (s: any) => s.studentName === processedStory.studentName && s.week === processedStory.week
+      );
+      if (existingIdx !== -1) {
+        currentStories[existingIdx] = {
+          ...currentStories[existingIdx],
+          ...processedStory,
+          id: currentStories[existingIdx].id,
+          updatedAt: new Date().toISOString()
+        };
+        updatedStories = currentStories;
+      } else {
+        processedStory.id = 'story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+        processedStory.createdAt = new Date().toISOString();
+        updatedStories = [processedStory, ...currentStories];
+      }
+    }
+
+    writeStories(updatedStories);
+    return res.json({ success: true, story: processedStory, stories: updatedStories });
+  } catch (err: any) {
+    console.error('Failed to save story on server:', err);
+    return res.status(500).json({ success: false, error: err.message || '서버 저장 실패' });
+  }
+});
+
+// 3. Delete a story (Only deleted when explicit delete requested!)
+app.delete('/api/stories/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const currentStories = readStories();
+    const filtered = currentStories.filter((s: any) => s.id !== id);
+    writeStories(filtered);
+    return res.json({ success: true, stories: filtered });
+  } catch (err: any) {
+    console.error('Failed to delete story on server:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. Update reaction emoji count
+app.post('/api/stories/:id/reaction', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { emoji } = req.body;
+    if (!emoji) return res.status(400).json({ error: 'Emoji is required' });
+
+    const currentStories = readStories();
+    const target = currentStories.find((s: any) => s.id === id);
+    if (!target) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+    target.reactions = target.reactions || {};
+    target.reactions[emoji] = (target.reactions[emoji] || 0) + 1;
+    writeStories(currentStories);
+    return res.json({ success: true, reactions: target.reactions, stories: currentStories });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Bulk sync & recovery (pulls client offline/local storage data onto server)
+app.post('/api/stories/bulk-sync', (req, res) => {
+  try {
+    const { stories: clientStories } = req.body;
+    if (!Array.isArray(clientStories) || clientStories.length === 0) {
+      return res.json({ success: true, merged: 0, stories: readStories() });
+    }
+
+    const currentStories = readStories();
+    let mergedCount = 0;
+
+    for (const clientStory of clientStories) {
+      if (!clientStory || !clientStory.studentName) continue;
+
+      const existingIdx = currentStories.findIndex(
+        (s: any) =>
+          (clientStory.id && s.id === clientStory.id) ||
+          (s.studentName === clientStory.studentName && s.week === clientStory.week)
+      );
+
+      const processed = processStoryImages(clientStory);
+
+      if (existingIdx !== -1) {
+        const existingImages = currentStories[existingIdx].imageUrls || [];
+        const clientImages = processed.imageUrls || [];
+        // If client has photos or updated content, merge it in
+        if (clientImages.length > existingImages.length || !currentStories[existingIdx].imageUrl) {
+          currentStories[existingIdx] = {
+            ...currentStories[existingIdx],
+            ...processed
+          };
+          mergedCount++;
+        }
+      } else {
+        processed.id = processed.id || 'story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+        currentStories.push(processed);
+        mergedCount++;
+      }
+    }
+
+    if (mergedCount > 0) {
+      writeStories(currentStories);
+    }
+
+    return res.json({ success: true, merged: mergedCount, stories: currentStories });
+  } catch (err: any) {
+    console.error('Bulk sync failed:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6. Direct photo upload endpoint
+app.post('/api/upload-photo', (req, res) => {
+  try {
+    const { imageBase64, name } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'imageBase64 is required' });
+    }
+    const url = saveBase64Image(imageBase64, name || 'upload');
+    return res.json({ success: true, url });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 7. Roster management APIs
+app.get('/api/roster', (_req, res) => {
+  try {
+    const roster = readRoster();
+    res.json({ success: true, roster });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/roster', (req, res) => {
+  try {
+    const { roster } = req.body;
+    if (Array.isArray(roster)) {
+      writeRoster(roster);
+      return res.json({ success: true, roster });
+    }
+    return res.status(400).json({ error: 'Roster must be an array' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// 8. Full backup & restore endpoints
+app.get('/api/backup', (_req, res) => {
+  try {
+    const stories = readStories();
+    const roster = readRoster();
+    res.json({
+      app: 'weekend-stories',
+      exportedAt: new Date().toISOString(),
+      stories,
+      roster
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/restore', (req, res) => {
+  try {
+    const { stories, roster } = req.body;
+    if (Array.isArray(stories)) {
+      writeStories(stories);
+    }
+    if (Array.isArray(roster)) {
+      writeRoster(roster);
+    }
+    return res.json({ success: true, stories: readStories(), roster: readRoster() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
 });
 

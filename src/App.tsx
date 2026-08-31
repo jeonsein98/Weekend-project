@@ -1,17 +1,12 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { StoryItem, ToastMessage, GasConfig, RosterStudent, getCurrentWeekString, isWeekMatch } from './types';
 import { Header } from './components/Header';
-import { SlidePresentationView } from './components/SlidePresentationView';
 import { StoryFormView } from './components/StoryFormView';
+import { SlidePresentationView } from './components/SlidePresentationView';
 import { WeekGalleryView } from './components/WeekGalleryView';
 import { GasSettingsModal } from './components/GasSettingsModal';
 import { AdminModal } from './components/AdminModal';
-import { ToastContainer, ToastMessage } from './components/Toast';
-import { StoryItem, GasConfig, RosterStudent, getCurrentWeekString } from './types';
+import { ToastContainer } from './components/Toast';
 import {
   getLocalStories,
   saveLocalStories,
@@ -20,13 +15,18 @@ import {
   syncFromGas,
   postToGas,
   getRosterList,
-  saveRosterList
+  fetchStoriesFromServer,
+  saveStoryToServer,
+  deleteStoryFromServer,
+  updateReactionOnServer,
+  fetchRosterFromServer,
+  saveRosterToServer
 } from './lib/storage';
 import { INITIAL_STORIES } from './lib/defaultData';
 
 export default function App() {
-  const [stories, setStories] = useState<StoryItem[]>([]);
-  const [roster, setRoster] = useState<RosterStudent[]>([]);
+  const [stories, setStories] = useState<StoryItem[]>(() => getLocalStories());
+  const [roster, setRoster] = useState<RosterStudent[]>(() => getRosterList());
   const [selectedWeek, setSelectedWeek] = useState<string>(() => getCurrentWeekString());
   const [selectedClass, setSelectedClass] = useState<string>('전체');
   const [currentView, setCurrentView] = useState<'ppt' | 'form' | 'gallery'>('form');
@@ -35,26 +35,53 @@ export default function App() {
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  // Load initial local data and gas config on mount
+  // Track if initial sync has occurred
+  const isInitialLoadedRef = useRef(false);
+
+  // Load server-side persistent data & roster on mount + background polling for real-time multi-device sync
   useEffect(() => {
-    const localData = getLocalStories();
-    setStories(localData);
+    async function loadInitialData() {
+      try {
+        const [serverStories, serverRoster] = await Promise.all([
+          fetchStoriesFromServer(),
+          fetchRosterFromServer()
+        ]);
+        if (serverStories && serverStories.length > 0) {
+          setStories(serverStories);
+        }
+        if (serverRoster && serverRoster.length > 0) {
+          setRoster(serverRoster);
+        }
+      } catch (e) {
+        console.warn('Initial server fetch warning:', e);
+      } finally {
+        isInitialLoadedRef.current = true;
+      }
+    }
 
-    const initialRoster = getRosterList();
-    setRoster(initialRoster);
+    loadInitialData();
 
+    // Load GAS config
     const gasConf = getGasConfig();
     setGasConfig(gasConf);
 
-    // If GAS is configured, sync in background
-    if (gasConf.isConnected && gasConf.webAppUrl) {
-      syncFromGas(gasConf.webAppUrl).then((remoteStories) => {
-        if (remoteStories && remoteStories.length > 0) {
-          setStories(remoteStories);
-          saveLocalStories(remoteStories);
+    // Background polling every 8 seconds so stories submitted by parents on their phones automatically show on the teacher's screen
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/stories');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success && Array.isArray(data.stories)) {
+            setStories(data.stories);
+            saveLocalStories(data.stories);
+          }
         }
-      });
-    }
+      } catch (err) {
+        // Silent polling error
+      }
+    }, 8000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // Toast Helper
@@ -63,7 +90,7 @@ export default function App() {
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
+    }, 4500);
   };
 
   const handleDismissToast = (id: string) => {
@@ -71,9 +98,10 @@ export default function App() {
   };
 
   // Update Story Reaction
-  const handleUpdateReaction = (storyId: string, emoji: string) => {
-    setStories((prev) => {
-      const updated = prev.map((item) => {
+  const handleUpdateReaction = async (storyId: string, emoji: string) => {
+    // Optimistic UI update
+    setStories((prev) =>
+      prev.map((item) => {
         if (item.id === storyId) {
           const currentReactions = item.reactions || {};
           const currentCount = currentReactions[emoji] || 0;
@@ -86,15 +114,21 @@ export default function App() {
           };
         }
         return item;
-      });
-      saveLocalStories(updated);
-      return updated;
-    });
+      })
+    );
+
+    try {
+      const updatedList = await updateReactionOnServer(storyId, emoji);
+      if (updatedList && updatedList.length > 0) {
+        setStories(updatedList);
+      }
+    } catch (e) {
+      console.error('Reaction sync error:', e);
+    }
   };
 
-  // Save or Edit Story
+  // Save or Edit Story (Stored permanently on server)
   const handleSaveStory = async (storyData: Omit<StoryItem, 'id' | 'createdAt'> & { id?: string }) => {
-    let updatedStories: StoryItem[];
     let savedStory: StoryItem;
 
     if (storyData.id) {
@@ -104,8 +138,6 @@ export default function App() {
         id: storyData.id,
         createdAt: new Date().toISOString()
       } as StoryItem;
-
-      updatedStories = stories.map((s) => (s.id === storyData.id ? savedStory : s));
     } else {
       // Check if there is already a story for this student and this week
       const existing = stories.find(
@@ -113,32 +145,44 @@ export default function App() {
       );
 
       if (existing) {
-        // Update existing story for that student and week
         savedStory = {
           ...existing,
           ...storyData,
           id: existing.id,
           createdAt: new Date().toISOString()
         };
-        updatedStories = stories.map((s) => (s.id === existing.id ? savedStory : s));
       } else {
-        // Create new story
         savedStory = {
           ...storyData,
-          id: 'story-' + Date.now(),
+          id: 'story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
           createdAt: new Date().toISOString()
         };
-        updatedStories = [savedStory, ...stories];
       }
     }
 
-    setStories(updatedStories);
-    saveLocalStories(updatedStories);
+    // Persist to server (converts images to permanent disk files)
+    const result = await saveStoryToServer(savedStory);
+
+    if (result.stories && result.stories.length > 0) {
+      setStories(result.stories);
+    } else {
+      setStories((prev) => {
+        const idx = prev.findIndex((s) => s.id === savedStory.id);
+        if (idx !== -1) {
+          const cp = [...prev];
+          cp[idx] = savedStory;
+          return cp;
+        }
+        return [savedStory, ...prev];
+      });
+    }
 
     // Sync to GAS if connected
     if (gasConfig.isConnected && gasConfig.webAppUrl) {
       postToGas(gasConfig.webAppUrl, savedStory);
     }
+
+    showToast('사진과 이야기가 서버에 안전하게 영구 저장되었습니다! (직접 삭제하기 전까지 보존됩니다)', 'success');
 
     // Automatically switch to PPT view of that week so teacher/students can see the slide!
     setSelectedWeek(savedStory.week);
@@ -153,16 +197,28 @@ export default function App() {
 
   // Reset Sample Data
   const handleResetSampleData = () => {
+    if (!confirm('샘플 데이터(김은솔 어린이 이야기)로 되돌리시겠습니까?')) return;
     setStories(INITIAL_STORIES);
     saveLocalStories(INITIAL_STORIES);
+    saveStoryToServer(INITIAL_STORIES[0]);
+    showToast('예시 데이터로 초기화되었습니다.', 'info');
   };
 
-  // Delete Story
-  const handleDeleteStory = (id: string) => {
-    const updated = stories.filter((s) => s.id !== id);
+  // Delete Story (Permanent server deletion only upon explicit user request)
+  const handleDeleteStory = async (id: string) => {
+    if (!confirm('이 주말 이야기를 삭제하시겠습니까? (삭제하기 전까지 사진과 내용은 안전하게 보존됩니다)')) {
+      return;
+    }
+    const updated = await deleteStoryFromServer(id);
     setStories(updated);
-    saveLocalStories(updated);
-    showToast('이야기가 삭제되었습니다.', 'info');
+    showToast('이야기가 정상적으로 삭제되었습니다.', 'info');
+  };
+
+  // Save Roster
+  const handleSaveRoster = async (newRoster: RosterStudent[]) => {
+    setRoster(newRoster);
+    const updated = await saveRosterToServer(newRoster);
+    setRoster(updated);
   };
 
   return (
@@ -183,7 +239,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenAdmin={() => setIsAdminModalOpen(true)}
         storyCount={stories.filter((s) => {
-          const matchWeek = selectedWeek === '전체' || s.week === selectedWeek;
+          const matchWeek = selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek);
           const stClass = roster.find(r => r.name.trim().toLowerCase() === s.studentName.trim().toLowerCase())?.className || '은솔1반';
           const matchClass = selectedClass === '전체' || stClass === selectedClass;
           return matchWeek && matchClass;
@@ -231,7 +287,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="py-4 border-t border-[#E8E4D9] bg-[#F5F2ED] text-center text-xs text-[#8B8378] font-medium">
-        <p>우리의 주말 지낸 이야기 • Natural Tones Classroom Storyboard • Google Gemini AI & Apps Script Google Sheets 연동</p>
+        <p>우리의 주말 지낸 이야기 • Natural Tones Classroom Storyboard • 실시간 다중 기기 영구 저장 & Google Gemini AI</p>
       </footer>
 
       {/* Google Apps Script Settings Modal */}
@@ -244,16 +300,14 @@ export default function App() {
         onShowToast={showToast}
       />
 
-      {/* Admin Student Roster Modal */}
+      {/* Admin Student Roster & Data Recovery Modal */}
       <AdminModal
         isOpen={isAdminModalOpen}
         onClose={() => setIsAdminModalOpen(false)}
         roster={roster}
         allStories={stories}
-        onSaveRoster={(newRoster) => {
-          setRoster(newRoster);
-          saveRosterList(newRoster);
-        }}
+        onSaveRoster={handleSaveRoster}
+        onStoriesUpdated={(newStories) => setStories(newStories)}
         onShowToast={showToast}
       />
     </div>

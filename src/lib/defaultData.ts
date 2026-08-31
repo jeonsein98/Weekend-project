@@ -6,7 +6,7 @@ import eunsolFamilySunset from '../assets/images/eunsol_family_sunset_1786166439
 export const INITIAL_STORIES: StoryItem[] = [
   {
     id: 'demo-eunsol',
-    week: '9월 1주차(방학지낸 이야기)',
+    week: '9월 1주차(방학지낸이야기)',
     studentName: '김은솔',
     parentPin: '1234',
     title: '신나는 여름방학 동해 바다 체험과 우리가족 모래성 쌓기',

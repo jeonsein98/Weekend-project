@@ -27,8 +27,14 @@ export interface GasConfig {
   lastSyncedAt?: string;
 }
 
+export interface ToastMessage {
+  id: string;
+  type: 'success' | 'error' | 'info';
+  message: string;
+}
+
 export const WEEKS_LIST = [
-  "9월 1주차(방학지낸 이야기)",
+  "9월 1주차(방학지낸이야기)",
   "9/5~9/6",
   "9/12~9/13",
   "9/19~9/20",
@@ -46,8 +52,17 @@ export const WEEKS_LIST = [
   "12/12~12/13",
   "12/19~12/20",
   "12/26~12/27",
-  "2월 1주차(방학지낸 이야기)"
+  "2월 1주차(방학지낸이야기)"
 ];
+
+/**
+ * Check if two week strings match, ignoring inner whitespace
+ */
+export function isWeekMatch(weekA?: string, weekB?: string): boolean {
+  if (!weekA || !weekB) return false;
+  if (weekA === '전체' || weekB === '전체') return true;
+  return weekA.replace(/\s+/g, '') === weekB.replace(/\s+/g, '');
+}
 
 /**
  * 2026학년도 주말 일정 및 방학 주차를 기준으로 오늘 날짜에 해당하는 주차를 반환
@@ -58,12 +73,12 @@ export function getCurrentWeekString(now = new Date()): string {
 
   // 1월 ~ 2월: 겨울방학 지낸 이야기
   if (month === 1 || month === 2) {
-    return "2월 1주차(방학지낸 이야기)";
+    return "2월 1주차(방학지낸이야기)";
   }
 
   // 9월 첫 주 시작 전 (8월 또는 9월 4일 이전)
   if (month < 9 || (month === 9 && day < 5)) {
-    return "9월 1주차(방학지낸 이야기)";
+    return "9월 1주차(방학지낸이야기)";
   }
 
   // 2026년도 주말 날짜 매핑표 (토요일~일요일 주말 기준)
