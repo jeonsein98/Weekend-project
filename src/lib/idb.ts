@@ -1,9 +1,10 @@
-import { StoryItem } from '../types';
+import { StoryItem, RosterStudent } from '../types';
 
 const DB_NAME = 'ClassgramOfflineDB_v1';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_STORIES = 'stories';
 const STORE_DRAFTS = 'drafts';
+const STORE_ROSTER = 'roster';
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -21,6 +22,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_DRAFTS)) {
         db.createObjectStore(STORE_DRAFTS, { keyPath: 'studentName' });
+      }
+      if (!db.objectStoreNames.contains(STORE_ROSTER)) {
+        db.createObjectStore(STORE_ROSTER, { keyPath: 'id' });
       }
     };
 
@@ -45,11 +49,23 @@ export async function saveAllStoriesToIndexedDB(stories: StoryItem[]): Promise<v
     const db = await openDB();
     const tx = db.transaction(STORE_STORIES, 'readwrite');
     const store = tx.objectStore(STORE_STORIES);
+    store.clear();
     for (const s of stories) {
       store.put(s);
     }
   } catch (err) {
     console.warn('[IDB] saveAllStoriesToIndexedDB failed:', err);
+  }
+}
+
+export async function deleteStoryFromIndexedDB(id: string): Promise<void> {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE_STORIES, 'readwrite');
+    const store = tx.objectStore(STORE_STORIES);
+    store.delete(id);
+  } catch (err) {
+    console.warn('[IDB] deleteStoryFromIndexedDB failed:', err);
   }
 }
 
@@ -102,5 +118,34 @@ export async function clearDraftFromIndexedDB(studentName: string): Promise<void
     store.delete(studentName);
   } catch (err) {
     console.warn('[IDB] clearDraftFromIndexedDB failed:', err);
+  }
+}
+
+export async function saveRosterToIndexedDB(roster: RosterStudent[]): Promise<void> {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE_ROSTER, 'readwrite');
+    const store = tx.objectStore(STORE_ROSTER);
+    store.clear();
+    for (const r of roster) {
+      store.put(r);
+    }
+  } catch (err) {
+    console.warn('[IDB] saveRosterToIndexedDB failed:', err);
+  }
+}
+
+export async function getRosterFromIndexedDB(): Promise<RosterStudent[]> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_ROSTER, 'readonly');
+      const store = tx.objectStore(STORE_ROSTER);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => resolve([]);
+    });
+  } catch (err) {
+    return [];
   }
 }

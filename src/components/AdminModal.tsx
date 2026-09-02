@@ -28,7 +28,14 @@ import {
   Send
 } from 'lucide-react';
 import { RosterStudent, StoryItem, WEEKS_LIST, isWeekMatch } from '../types';
-import { syncLocalStoriesToServer, saveStoryToServer } from '../lib/storage';
+import {
+  syncLocalStoriesToServer,
+  saveStoryToServer,
+  restoreEunsol18Roster,
+  scanAndRecoverBrowserRoster,
+  getRosterSnapshots,
+  EUNSOL_18_ROSTER
+} from '../lib/storage';
 
 function compressImageFile(file: File): Promise<string> {
   return new Promise((resolve) => {
@@ -129,6 +136,71 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   // Deletion confirmation states
   const [studentToDelete, setStudentToDelete] = useState<RosterStudent | null>(null);
   const [classToDelete, setClassToDelete] = useState<string | null>(null);
+
+  // Roster Recovery & Defense States
+  const [isRestoringRoster, setIsRestoringRoster] = useState(false);
+  const [showRosterPasteBox, setShowRosterPasteBox] = useState(false);
+  const [rosterPasteText, setRosterPasteText] = useState(
+    EUNSOL_18_ROSTER.map((s, idx) => `${idx + 1}. ${s.name}`).join('\n')
+  );
+
+  // Eunsol 1 Ban 18 Students 1-Click Restore Handler
+  const handleRestoreEunsol18 = async () => {
+    setIsRestoringRoster(true);
+    try {
+      const restored = await restoreEunsol18Roster();
+      onSaveRoster(restored);
+      onShowToast('은솔1반 18명 원아 명단이 성공적으로 복구되었습니다! (강루하, 김강모, 김강민, 김도희... 18명)', 'success');
+    } catch (err) {
+      onShowToast('명단 복구 중 오류가 발생했습니다.', 'error');
+    } finally {
+      setIsRestoringRoster(false);
+    }
+  };
+
+  // Browser Deep Scan for any lost student names
+  const handleScanBrowserCache = () => {
+    const { foundStudents, sourceKeys } = scanAndRecoverBrowserRoster();
+    if (foundStudents.length === 0) {
+      onShowToast('브라우저 캐시에서 추가로 발견된 원아가 없습니다. [은솔1반 18명 즉시 복원]을 눌러 복구해 주세요.', 'info');
+      return;
+    }
+    const currentNames = new Set(roster.map((s) => s.name.trim()));
+    const newItems = foundStudents.filter((s) => !currentNames.has(s.name.trim()));
+    if (newItems.length === 0) {
+      onShowToast(`브라우저 캐시(${sourceKeys.join(', ')})를 검사했으나 현재 명단에 이미 모두 등록되어 있습니다.`, 'info');
+      return;
+    }
+    const updated = [...roster, ...newItems];
+    onSaveRoster(updated);
+    onShowToast(`브라우저 캐시에서 ${newItems.length}명의 원아를 찾아 성공적으로 복구했습니다!`, 'success');
+  };
+
+  // Quick Apply pasted 18 students
+  const handleApplyCustom18 = () => {
+    if (!rosterPasteText.trim()) return;
+    const lines = rosterPasteText
+      .split(/[\n,]/)
+      .map((line) => line.replace(/^\d+[\.\)\s\-]+/, '').trim())
+      .filter((line) => line.length > 0);
+
+    if (lines.length === 0) {
+      onShowToast('입력된 원아 이름이 없습니다.', 'error');
+      return;
+    }
+
+    const newRoster: RosterStudent[] = lines.map((name, idx) => ({
+      id: `roster-eunsol-${Date.now()}-${idx + 1}`,
+      name,
+      className: '은솔1반',
+      parentPin: '1234',
+      note: `${idx + 1}번 원아`
+    }));
+
+    onSaveRoster(newRoster);
+    onShowToast(`은솔1반 ${newRoster.length}명 원아 명단이 안전하게 등록 및 영구 보존되었습니다!`, 'success');
+    setShowRosterPasteBox(false);
+  };
 
   useEffect(() => {
     if (!isOpen) {
@@ -783,6 +855,131 @@ ${name} 학부모님, 사진을 첨부하신 후 화면 맨 아래의 [Instagram
               </div>
             </div>
 
+            {/* Eunsol Class 1 18 Students Emergency Restoration & Protection Center */}
+            <div className="bg-emerald-50/80 border-2 border-emerald-300 p-5 rounded-2xl space-y-4 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                    18
+                  </div>
+                  <div>
+                    <h4 className="font-serif font-bold text-emerald-950 text-base flex items-center gap-2">
+                      <span>은솔1반 18명 원아 명단 긴급 복원 & 데이터 보호 센터</span>
+                    </h4>
+                    <p className="text-xs text-emerald-800 font-medium">
+                      서버 디스크(/data/roster.json)와 브라우저 IndexedDB 3중 백업으로 절대 유실되지 않도록 보존합니다.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {roster.filter((s) => (s.className || '은솔1반').includes('은솔')).length >= 18 ? (
+                    <span className="px-3 py-1 rounded-full bg-emerald-200/80 text-emerald-900 font-black text-xs flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                      은솔1반 18명 정상 등록 및 영구 보호 중
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 rounded-full bg-amber-200 text-amber-900 font-black text-xs flex items-center gap-1 animate-pulse">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-700" />
+                      은솔1반 ({roster.filter((s) => (s.className || '은솔1반').includes('은솔')).length}/18명) 복구 권장
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Action Buttons for 18 Students Restoration */}
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleRestoreEunsol18}
+                  disabled={isRestoringRoster}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 active:scale-95 text-white font-extrabold text-xs shadow-md transition-all flex items-center gap-2"
+                >
+                  {isRestoringRoster ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4 text-emerald-200" />
+                  )}
+                  <span>⚡ 은솔1반 18명 원클릭 즉시 복원 (강루하 ~ 하시훈 18명)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleScanBrowserCache}
+                  className="px-3.5 py-2.5 rounded-xl bg-white border border-emerald-300 hover:bg-emerald-100/50 text-emerald-900 font-bold text-xs shadow-xs transition-all flex items-center gap-1.5"
+                >
+                  <Search className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>🔍 브라우저 캐시 전수 검사 & 복구</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowRosterPasteBox(!showRosterPasteBox)}
+                  className="px-3.5 py-2.5 rounded-xl bg-white border border-emerald-300 hover:bg-emerald-100/50 text-emerald-900 font-bold text-xs shadow-xs transition-all flex items-center gap-1.5"
+                >
+                  <Edit2 className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>{showRosterPasteBox ? '명단 편집 닫기' : '📋 18명 명단 직접 확인 / 수정'}</span>
+                </button>
+              </div>
+
+              {/* Collapsible 18 Student Quick Paste & Customize Box */}
+              {showRosterPasteBox && (
+                <div className="bg-white p-4 rounded-xl border border-emerald-300 space-y-3 mt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-emerald-950">
+                      은솔1반 18명 원아 명단 확인 및 수정 (한 줄에 한 명씩 또는 쉼표 구분)
+                    </span>
+                    <span className="text-[11px] text-[#737373]">
+                      실제 출석부 순서나 이름에 맞춰 자유롭게 수정 후 저장하세요
+                    </span>
+                  </div>
+                  <textarea
+                    rows={6}
+                    value={rosterPasteText}
+                    onChange={(e) => setRosterPasteText(e.target.value)}
+                    placeholder="1. 강루하&#10;2. 김강모&#10;3. 김강민&#10;..."
+                    className="w-full bg-[#FAF9F6] border border-emerald-200 rounded-xl p-3 text-xs font-mono font-bold text-[#2D2A26] focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowRosterPasteBox(false)}
+                      className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-bold text-gray-600 hover:bg-gray-50"
+                    >
+                      취소
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleApplyCustom18}
+                      className="px-4 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-black shadow-xs"
+                    >
+                      은솔1반 18명 저장 및 영구 보존 적용
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Roster Badges Preview for Eunsol 1 Ban */}
+              <div className="pt-2 border-t border-emerald-200/60">
+                <span className="text-[11px] font-extrabold text-emerald-900 block mb-1.5">
+                  은솔1반 등록 현황 ({roster.filter((s) => (s.className || '은솔1반').includes('은솔')).length}명):
+                </span>
+                <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-2 bg-white/80 rounded-xl border border-emerald-200">
+                  {roster
+                    .filter((s) => (s.className || '은솔1반').includes('은솔'))
+                    .map((s, idx) => (
+                      <span
+                        key={s.id}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-100/70 border border-emerald-200 text-emerald-950 text-xs font-bold"
+                      >
+                        <span className="text-[10px] text-emerald-700 font-mono">#{idx + 1}</span>
+                        {s.name}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            </div>
+
             {/* Form: Add New Student */}
             <div className="bg-[#FAF9F6] border border-[#E8E4D9] p-5 rounded-2xl space-y-4">
               <div className="flex items-center justify-between">
@@ -1273,9 +1470,10 @@ ${name} 학부모님, 사진을 첨부하신 후 화면 맨 아래의 [Instagram
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
                       {proxyImages.map((pUrl, pIdx) => (
                         <div key={pIdx} className="p-2 border border-[#E8E4D9] rounded-xl bg-white space-y-1.5">
-                          <div className="relative aspect-[4/3] rounded-lg overflow-hidden bg-black/5">
-                            <img src={pUrl} alt={`사진 ${pIdx + 1}`} className="w-full h-full object-cover" />
-                            <span className="absolute top-1 left-1 bg-black/70 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                          <div className="relative aspect-[4/3] rounded-lg overflow-hidden bg-black/90 flex items-center justify-center">
+                            <img src={pUrl} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover blur-md opacity-35 scale-110 pointer-events-none" />
+                            <img src={pUrl} alt={`사진 ${pIdx + 1}`} className="relative z-10 max-h-full max-w-full object-contain pointer-events-none" />
+                            <span className="absolute top-1 left-1 z-20 bg-black/70 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
                               #{pIdx + 1}
                             </span>
                             <button

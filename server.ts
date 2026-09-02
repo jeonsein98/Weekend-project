@@ -10,15 +10,16 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Increase body payload limit for image base64 uploads
-app.use(express.json({ limit: '35mb' }));
-app.use(express.urlencoded({ limit: '35mb', extended: true }));
+// Increase body payload limit for image base64 uploads (up to 100mb for ultra high-res mobile photos)
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 // Persistent Storage Directories
 const DATA_DIR = path.join(process.cwd(), 'data');
 const STORIES_FILE = path.join(DATA_DIR, 'stories.json');
 const STORIES_BACKUP_FILE = path.join(DATA_DIR, 'stories.backup.json');
 const ROSTER_FILE = path.join(DATA_DIR, 'roster.json');
+const ROSTER_BACKUP_FILE = path.join(DATA_DIR, 'roster.backup.json');
 const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -51,9 +52,35 @@ const DEFAULT_INITIAL_STORIES = [
   }
 ];
 
-const DEFAULT_INITIAL_ROSTER = [
-  { id: 'roster-eunsol', name: '김은솔', className: '은솔1반', parentPin: '1234', note: '가상 원아 (학부모 참고 예시)' }
+export const DEFAULT_INITIAL_ROSTER = [
+  { id: 'roster-es-1', name: '강루하', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-2', name: '김강모', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-3', name: '김강민', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-4', name: '김도희', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-5', name: '김리한', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-6', name: '김재하', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-7', name: '김이찬', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-8', name: '문시안', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-9', name: '박지안', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-10', name: '박지우', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-11', name: '서채연', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-12', name: '안세은', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-13', name: '안지유', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-14', name: '엄소율', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-15', name: '임하윤', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-16', name: '최인율', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-17', name: '하시윤', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-18', name: '하시훈', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' }
 ];
+
+const BANNED_MOCK_STORY_IDS = new Set([
+  'demo-1',
+  'demo-2',
+  'demo-3',
+  'demo-4',
+  'story-luha',
+  'story-dohee'
+]);
 
 function readStories(): any[] {
   try {
@@ -61,7 +88,11 @@ function readStories(): any[] {
       const data = fs.readFileSync(STORIES_FILE, 'utf-8');
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        const filtered = parsed.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
+        if (filtered.length !== parsed.length) {
+          writeStories(filtered);
+        }
+        return filtered.length > 0 ? filtered : DEFAULT_INITIAL_STORIES;
       }
     }
   } catch (err) {
@@ -69,7 +100,11 @@ function readStories(): any[] {
     try {
       if (fs.existsSync(STORIES_BACKUP_FILE)) {
         const backupData = fs.readFileSync(STORIES_BACKUP_FILE, 'utf-8');
-        return JSON.parse(backupData);
+        const parsedBackup = JSON.parse(backupData);
+        if (Array.isArray(parsedBackup)) {
+          const filtered = parsedBackup.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
+          return filtered.length > 0 ? filtered : DEFAULT_INITIAL_STORIES;
+        }
       }
     } catch (bErr) {
       console.error('Backup read failed:', bErr);
@@ -101,7 +136,18 @@ function readRoster(): any[] {
       }
     }
   } catch (err) {
-    console.error('Failed to read roster:', err);
+    console.error('Failed to read roster, checking backup:', err);
+    try {
+      if (fs.existsSync(ROSTER_BACKUP_FILE)) {
+        const backupData = fs.readFileSync(ROSTER_BACKUP_FILE, 'utf-8');
+        const parsedBackup = JSON.parse(backupData);
+        if (Array.isArray(parsedBackup) && parsedBackup.length > 0) {
+          return parsedBackup;
+        }
+      }
+    } catch (bErr) {
+      console.error('Failed to read roster backup:', bErr);
+    }
   }
   writeRoster(DEFAULT_INITIAL_ROSTER);
   return DEFAULT_INITIAL_ROSTER;
@@ -109,7 +155,9 @@ function readRoster(): any[] {
 
 function writeRoster(roster: any[]): boolean {
   try {
-    fs.writeFileSync(ROSTER_FILE, JSON.stringify(roster, null, 2), 'utf-8');
+    const jsonStr = JSON.stringify(roster, null, 2);
+    fs.writeFileSync(ROSTER_FILE, jsonStr, 'utf-8');
+    fs.writeFileSync(ROSTER_BACKUP_FILE, jsonStr, 'utf-8');
     return true;
   } catch (err) {
     console.error('Failed to write roster:', err);
@@ -470,7 +518,7 @@ app.post('/api/stories/bulk-sync', (req, res) => {
     let mergedCount = 0;
 
     for (const clientStory of clientStories) {
-      if (!clientStory || !clientStory.studentName) continue;
+      if (!clientStory || !clientStory.studentName || BANNED_MOCK_STORY_IDS.has(clientStory.id)) continue;
 
       const existingIdx = currentStories.findIndex(
         (s: any) =>
@@ -541,6 +589,59 @@ app.post('/api/roster', (req, res) => {
       return res.json({ success: true, roster });
     }
     return res.status(400).json({ error: 'Roster must be an array' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Non-destructive roster merge endpoint
+app.post('/api/roster/merge', (req, res) => {
+  try {
+    const { roster: clientRoster } = req.body;
+    const currentRoster = readRoster();
+    const map = new Map<string, any>();
+
+    // Put current roster first
+    for (const s of currentRoster) {
+      if (s && s.name) {
+        map.set(s.name.trim().toLowerCase(), s);
+      }
+    }
+
+    // Merge in client roster without deleting existing
+    if (Array.isArray(clientRoster)) {
+      for (const s of clientRoster) {
+        if (s && s.name) {
+          const key = s.name.trim().toLowerCase();
+          if (!map.has(key)) {
+            map.set(key, s);
+          } else {
+            // Update fields if provided
+            const existing = map.get(key);
+            map.set(key, {
+              ...existing,
+              className: s.className || existing.className,
+              parentPin: s.parentPin || existing.parentPin,
+              note: s.note || existing.note
+            });
+          }
+        }
+      }
+    }
+
+    const merged = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+    writeRoster(merged);
+    return res.json({ success: true, roster: merged, total: merged.length });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// Emergency 1-click restore for Eunsol 1 Ban (18 students)
+app.post('/api/roster/restore-eunsol18', (_req, res) => {
+  try {
+    writeRoster(DEFAULT_INITIAL_ROSTER);
+    return res.json({ success: true, roster: DEFAULT_INITIAL_ROSTER, count: DEFAULT_INITIAL_ROSTER.length });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

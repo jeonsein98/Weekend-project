@@ -978,9 +978,10 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                         </div>
 
                         {/* Image Frame */}
-                        <div className="relative aspect-[4/3] w-full rounded-xl overflow-hidden bg-black border border-[#DBDBDB]">
-                          <img src={pUrl} alt={`첨부 사진 ${idx + 1}`} className="w-full h-full object-cover" />
-                          <span className="absolute top-2 left-2 bg-black/75 backdrop-blur-xs text-white font-extrabold text-[10px] px-2 py-0.5 rounded-full border border-white/20">
+                        <div className="relative aspect-[4/3] w-full rounded-xl overflow-hidden bg-black border border-[#DBDBDB] flex items-center justify-center">
+                          <img src={pUrl} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover blur-xl opacity-35 scale-110 pointer-events-none" />
+                          <img src={pUrl} alt={`첨부 사진 ${idx + 1}`} className="relative z-10 max-h-full max-w-full object-contain pointer-events-none" />
+                          <span className="absolute top-2 left-2 z-20 bg-black/75 backdrop-blur-xs text-white font-extrabold text-[10px] px-2 py-0.5 rounded-full border border-white/20">
                             #{idx + 1}
                           </span>
                         </div>

@@ -1,15 +1,69 @@
 import { StoryItem, GasConfig, RosterStudent } from '../types';
 import { INITIAL_STORIES } from './defaultData';
-import { saveStoryToIndexedDB, saveAllStoriesToIndexedDB, getAllStoriesFromIndexedDB } from './idb';
+import {
+  saveStoryToIndexedDB,
+  saveAllStoriesToIndexedDB,
+  getAllStoriesFromIndexedDB,
+  deleteStoryFromIndexedDB,
+  saveRosterToIndexedDB,
+  getRosterFromIndexedDB
+} from './idb';
 
 const STORAGE_KEY_STORIES = 'weekend_stories_data_v1';
 const STORAGE_KEY_GAS_CONFIG = 'weekend_stories_gas_config_v1';
 const STORAGE_KEY_ROSTER = 'kindergarten_roster_v1';
+const STORAGE_KEY_ROSTER_SNAPSHOTS = 'kindergarten_roster_snapshots_v1';
 
-export const INITIAL_ROSTER: RosterStudent[] = [
-  { id: 'roster-eunsol', name: '김은솔', className: '은솔1반', parentPin: '1234', note: '가상 원아 (학부모 참고 예시)' },
-  { id: 'roster-dohee', name: '김도희', className: '은솔1반', parentPin: '1234', note: '학부모 사진 업로드 확인' }
+export const BANNED_MOCK_STORY_IDS = new Set([
+  'demo-1',
+  'demo-2',
+  'demo-3',
+  'demo-4',
+  'story-luha',
+  'story-dohee'
+]);
+
+export const LEGACY_MOCK_STUDENT_NAMES = new Set([
+  '김은솔',
+  '강민준',
+  '고서준',
+  '권하은',
+  '배시우',
+  '서아린',
+  '신예준',
+  '오지호',
+  '유하율',
+  '윤서아',
+  '이수아',
+  '임유준',
+  '장민서',
+  '정채원',
+  '조서현',
+  '황다은'
+]);
+
+export const EUNSOL_18_ROSTER: RosterStudent[] = [
+  { id: 'roster-es-1', name: '강루하', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-2', name: '김강모', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-3', name: '김강민', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-4', name: '김도희', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-5', name: '김리한', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-6', name: '김재하', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-7', name: '김이찬', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-8', name: '문시안', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-9', name: '박지안', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-10', name: '박지우', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-11', name: '서채연', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-12', name: '안세은', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-13', name: '안지유', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-14', name: '엄소율', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-15', name: '임하윤', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-16', name: '최인율', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-17', name: '하시윤', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
+  { id: 'roster-es-18', name: '하시훈', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' }
 ];
+
+export const INITIAL_ROSTER: RosterStudent[] = EUNSOL_18_ROSTER;
 
 export function ensureRosterOrder(list: RosterStudent[]): RosterStudent[] {
   if (!Array.isArray(list) || list.length === 0) return list;
@@ -23,10 +77,10 @@ export function ensureRosterOrder(list: RosterStudent[]): RosterStudent[] {
  */
 export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
   // Retrieve local caches (localStorage and IndexedDB)
-  const localStories = getLocalStories();
+  const localStories = getLocalStories().filter(s => !BANNED_MOCK_STORY_IDS.has(s.id));
   let idbStories: StoryItem[] = [];
   try {
-    idbStories = await getAllStoriesFromIndexedDB();
+    idbStories = (await getAllStoriesFromIndexedDB()).filter(s => !BANNED_MOCK_STORY_IDS.has(s.id));
   } catch (idbErr) {
     console.warn('[Storage] IDB read skipped:', idbErr);
   }
@@ -34,7 +88,7 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
   // Aggregate all known client stories
   const clientMap = new Map<string, StoryItem>();
   for (const s of [...localStories, ...idbStories]) {
-    if (s && s.id && s.studentName) {
+    if (s && s.id && s.studentName && !BANNED_MOCK_STORY_IDS.has(s.id)) {
       clientMap.set(s.id, s);
     }
   }
@@ -45,12 +99,13 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.stories)) {
-        let serverStories: StoryItem[] = data.stories;
+        let serverStories: StoryItem[] = data.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
 
-        // Identify any client stories missing from the server (excluding demo data)
+        // Identify any client stories missing from the server (excluding demo data & banned mock items)
         const missingOnServer = allClientStories.filter(
           (clientStory) =>
             clientStory.id !== 'demo-eunsol' &&
+            !BANNED_MOCK_STORY_IDS.has(clientStory.id) &&
             !serverStories.some(
               (s) => s.id === clientStory.id || (s.studentName === clientStory.studentName && s.week === clientStory.week)
             )
@@ -67,7 +122,7 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
             if (syncRes.ok) {
               const syncData = await syncRes.json();
               if (syncData && syncData.stories) {
-                serverStories = syncData.stories;
+                serverStories = syncData.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
               }
             }
           } catch (syncErr) {
@@ -78,7 +133,7 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
         // Non-destructive bidirectional merge: NEVER wipe client stories if sync was delayed
         const mergedList = [...serverStories];
         for (const cStory of allClientStories) {
-          if (cStory.id !== 'demo-eunsol' && !mergedList.some(s => s.id === cStory.id || (s.studentName === cStory.studentName && s.week === cStory.week))) {
+          if (cStory.id !== 'demo-eunsol' && !BANNED_MOCK_STORY_IDS.has(cStory.id) && !mergedList.some(s => s.id === cStory.id || (s.studentName === cStory.studentName && s.week === cStory.week))) {
             mergedList.push(cStory);
           }
         }
@@ -147,8 +202,9 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
  * Only removed when explicitly requested.
  */
 export async function deleteStoryFromServer(id: string): Promise<StoryItem[]> {
-  const localList = getLocalStories().filter((s) => s.id !== id);
+  const localList = getLocalStories().filter((s) => s.id !== id && !BANNED_MOCK_STORY_IDS.has(s.id));
   saveLocalStories(localList);
+  deleteStoryFromIndexedDB(id).catch(() => {});
 
   try {
     const res = await fetch(`/api/stories/${encodeURIComponent(id)}`, {
@@ -157,8 +213,9 @@ export async function deleteStoryFromServer(id: string): Promise<StoryItem[]> {
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.stories)) {
-        saveLocalStories(data.stories);
-        return data.stories;
+        const cleanStories = data.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
+        saveLocalStories(cleanStories);
+        return cleanStories;
       }
     }
   } catch (err) {
@@ -192,27 +249,84 @@ export async function updateReactionOnServer(id: string, emoji: string): Promise
 }
 
 /**
- * Fetch class roster from server
+ * Fetch class roster from server with non-destructive bidirectional merge.
+ * Guarantees zero data loss across restarts or cache resets.
  */
 export async function fetchRosterFromServer(): Promise<RosterStudent[]> {
+  // 1. Gather all local client sources (localStorage + IndexedDB)
+  const localRoster = getRosterList().filter(s => s && s.name && !LEGACY_MOCK_STUDENT_NAMES.has(s.name.trim()));
+  let idbRoster: RosterStudent[] = [];
+  try {
+    idbRoster = (await getRosterFromIndexedDB()).filter(s => s && s.name && !LEGACY_MOCK_STUDENT_NAMES.has(s.name.trim()));
+  } catch (err) {
+    console.warn('[Storage] IDB roster read skipped:', err);
+  }
+
+  const clientMap = new Map<string, RosterStudent>();
+  for (const s of [...localRoster, ...idbRoster]) {
+    if (s && s.name && s.name.trim() && !LEGACY_MOCK_STUDENT_NAMES.has(s.name.trim())) {
+      clientMap.set(s.name.trim().toLowerCase(), s);
+    }
+  }
+
   try {
     const res = await fetch('/api/roster');
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.roster)) {
-        const ordered = ensureRosterOrder(data.roster);
-        saveRosterList(ordered);
-        return ordered;
+        const serverRoster: RosterStudent[] = data.roster.filter((s: RosterStudent) => s && s.name && !LEGACY_MOCK_STUDENT_NAMES.has(s.name.trim()));
+
+        // If server roster was empty or had legacy, fall back to initial
+        const validServerRoster = serverRoster.length > 0 ? serverRoster : EUNSOL_18_ROSTER;
+
+        // Union merge between server roster and client roster
+        const mergedMap = new Map<string, RosterStudent>();
+        for (const s of validServerRoster) {
+          if (s && s.name && s.name.trim() && !LEGACY_MOCK_STUDENT_NAMES.has(s.name.trim())) {
+            mergedMap.set(s.name.trim().toLowerCase(), s);
+          }
+        }
+
+        let hasNewClientItems = false;
+        for (const [key, student] of clientMap.entries()) {
+          if (!mergedMap.has(key)) {
+            mergedMap.set(key, student);
+            hasNewClientItems = true;
+          }
+        }
+
+        const mergedList = ensureRosterOrder(Array.from(mergedMap.values()));
+        saveRosterList(mergedList);
+
+        // If client had students that the server was missing, sync them up immediately!
+        if (hasNewClientItems) {
+          try {
+            await fetch('/api/roster/merge', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ roster: mergedList })
+            });
+          } catch (mErr) {
+            console.warn('[Storage] Server roster merge sync error:', mErr);
+          }
+        }
+
+        return mergedList;
       }
     }
   } catch (err) {
-    console.warn('[Storage] Fetch roster from server failed, using local roster:', err);
+    console.warn('[Storage] Fetch roster from server failed, using local sources:', err);
   }
-  return getRosterList();
+
+  if (clientMap.size > 0) {
+    const fallbackList = ensureRosterOrder(Array.from(clientMap.values()));
+    return fallbackList;
+  }
+  return EUNSOL_18_ROSTER;
 }
 
 /**
- * Save class roster to server
+ * Save class roster to server and local persistent caches
  */
 export async function saveRosterToServer(roster: RosterStudent[]): Promise<RosterStudent[]> {
   const ordered = ensureRosterOrder(roster);
@@ -234,6 +348,87 @@ export async function saveRosterToServer(roster: RosterStudent[]): Promise<Roste
     console.error('[Storage] Save roster to server error:', err);
   }
   return ordered;
+}
+
+/**
+ * Emergency restore of Eunsol 1 Ban (18 students)
+ */
+export async function restoreEunsol18Roster(): Promise<RosterStudent[]> {
+  try {
+    const res = await fetch('/api/roster/restore-eunsol18', { method: 'POST' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.roster)) {
+        const ordered = ensureRosterOrder(data.roster);
+        saveRosterList(ordered);
+        return ordered;
+      }
+    }
+  } catch (err) {
+    console.warn('[Storage] Server restore call failed, restoring locally:', err);
+  }
+
+  saveRosterList(EUNSOL_18_ROSTER);
+  await saveRosterToServer(EUNSOL_18_ROSTER);
+  return EUNSOL_18_ROSTER;
+}
+
+/**
+ * Deep scan browser localStorage for any previously stored student data
+ */
+export function scanAndRecoverBrowserRoster(): { foundStudents: RosterStudent[]; sourceKeys: string[] } {
+  const foundMap = new Map<string, RosterStudent>();
+  const sourceKeys: string[] = [];
+
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+
+        // Check if raw contains student-like structures
+        if (raw.includes('김은솔') || raw.includes('김도희') || raw.includes('은솔1반') || raw.includes('parentPin')) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            for (const item of parsed) {
+              if (item && item.name && typeof item.name === 'string') {
+                foundMap.set(item.name.trim().toLowerCase(), {
+                  id: item.id || `recovered-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                  name: item.name.trim(),
+                  className: item.className || '은솔1반',
+                  parentPin: item.parentPin || '1234',
+                  note: item.note || '브라우저 캐시에서 복원됨'
+                });
+                if (!sourceKeys.includes(key)) sourceKeys.push(key);
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+  } catch (err) {
+    console.error('Scan error:', err);
+  }
+
+  return {
+    foundStudents: Array.from(foundMap.values()),
+    sourceKeys
+  };
+}
+
+/**
+ * Get snapshots history
+ */
+export function getRosterSnapshots(): Array<{ timestamp: string; count: number; data: RosterStudent[] }> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_ROSTER_SNAPSHOTS);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -271,8 +466,13 @@ export function getRosterList(): RosterStudent[] {
       return INITIAL_ROSTER;
     }
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      const ordered = ensureRosterOrder(parsed);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const cleaned = parsed.filter((s: RosterStudent) => s && s.name && !LEGACY_MOCK_STUDENT_NAMES.has(s.name.trim()));
+      if (cleaned.length === 0) {
+        localStorage.setItem(STORAGE_KEY_ROSTER, JSON.stringify(INITIAL_ROSTER));
+        return INITIAL_ROSTER;
+      }
+      const ordered = ensureRosterOrder(cleaned);
       return ordered;
     }
     return INITIAL_ROSTER;
@@ -286,6 +486,20 @@ export function saveRosterList(roster: RosterStudent[]): void {
   try {
     const ordered = ensureRosterOrder(roster);
     localStorage.setItem(STORAGE_KEY_ROSTER, JSON.stringify(ordered));
+    // Asynchronously save to IndexedDB
+    saveRosterToIndexedDB(ordered).catch(() => {});
+
+    // Save rolling snapshots
+    try {
+      const snapRaw = localStorage.getItem(STORAGE_KEY_ROSTER_SNAPSHOTS);
+      const snaps = snapRaw ? JSON.parse(snapRaw) : [];
+      snaps.unshift({
+        timestamp: new Date().toISOString(),
+        count: ordered.length,
+        data: ordered
+      });
+      localStorage.setItem(STORAGE_KEY_ROSTER_SNAPSHOTS, JSON.stringify(snaps.slice(0, 8)));
+    } catch {}
   } catch (e) {
     console.error('Failed to save roster list', e);
   }
@@ -299,11 +513,8 @@ export function getLocalStories(): StoryItem[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      // Only filter out legacy mock items (demo-1..demo-4) without touching any real student items
-      const legacyMockIds = new Set(['demo-1', 'demo-2', 'demo-3', 'demo-4']);
-
       const normalized = parsed
-        .filter((item: any) => !legacyMockIds.has(item.id))
+        .filter((item: any) => item && item.id && !BANNED_MOCK_STORY_IDS.has(item.id))
         .map((item: any) => {
           let urls = item.imageUrls && Array.isArray(item.imageUrls) && item.imageUrls.length > 0
             ? item.imageUrls

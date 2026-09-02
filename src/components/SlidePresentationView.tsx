@@ -90,13 +90,25 @@ const DEFAULT_FALLBACK_IMAGES = [
   '/eunsol_family_sunset.jpg'
 ];
 
-const SlidePhoto: React.FC<{
+interface SlidePhotoProps {
   src: string;
   alt: string;
   style?: React.CSSProperties;
   className?: string;
   fallbackIndex?: number;
-}> = ({ src, alt, style, className, fallbackIndex = 0 }) => {
+  fitMode?: 'contain' | 'cover';
+  showBackdropBlur?: boolean;
+}
+
+const SlidePhoto: React.FC<SlidePhotoProps> = ({
+  src,
+  alt,
+  style,
+  className,
+  fallbackIndex = 0,
+  fitMode = 'contain',
+  showBackdropBlur = true
+}) => {
   const [currentSrc, setCurrentSrc] = useState(src);
   const [fallbackAttempt, setFallbackAttempt] = useState(0);
   const [hasError, setHasError] = useState(false);
@@ -128,12 +140,36 @@ const SlidePhoto: React.FC<{
     );
   }
 
+  if (fitMode === 'contain') {
+    return (
+      <div className="relative w-full h-full flex items-center justify-center overflow-hidden bg-black select-none">
+        {/* Ambient Blur Backdrop: 사진 색감으로 여백을 채워 몰입감 향상 */}
+        {showBackdropBlur && (
+          <img
+            src={currentSrc}
+            alt=""
+            aria-hidden="true"
+            className="absolute inset-0 w-full h-full object-cover blur-2xl opacity-35 scale-110 pointer-events-none select-none"
+          />
+        )}
+        {/* Full Uncropped Photo: 원본 비율 100% 보존, 얼굴/모래성 등 잘림 방지 */}
+        <img
+          src={currentSrc}
+          alt={alt}
+          style={style}
+          className={`relative z-10 max-h-full max-w-full m-auto object-contain pointer-events-none select-none drop-shadow-2xl ${className || ''}`}
+          onError={handleError}
+        />
+      </div>
+    );
+  }
+
   return (
     <img
       src={currentSrc}
       alt={alt}
       style={style}
-      className={className}
+      className={`w-full h-full object-cover pointer-events-none select-none ${className || ''}`}
       onError={handleError}
     />
   );
@@ -158,6 +194,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
   const [theme, setTheme] = useState<'cream' | 'sage' | 'dark'>('cream');
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const [showHeartAnim, setShowHeartAnim] = useState(false);
+  const [imageFitMode, setImageFitMode] = useState<'contain' | 'cover'>('contain');
 
   // Free Zoom & Pan States
   const [zoomScale, setZoomScale] = useState(1);
@@ -697,11 +734,30 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
               className="relative w-full bg-black flex flex-col items-center justify-center overflow-hidden select-none min-h-[450px] sm:min-h-[580px] lg:min-h-[680px]"
               onDoubleClick={() => handleDoubleTap(currentStory.id)}
             >
-              {/* Floating Canva-style Magnifier Tool Overlay Bar */}
+              {/* Floating Canva-style Magnifier & Fit Mode Tool Overlay Bar */}
               <div
                 className="absolute top-3 left-3 z-30 flex items-center gap-2 bg-black/80 backdrop-blur-md px-3.5 py-1.5 rounded-full border border-white/20 shadow-xl text-white"
                 onClick={(e) => e.stopPropagation()}
               >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setImageFitMode((prev) => (prev === 'contain' ? 'cover' : 'contain'));
+                  }}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-black transition-all ${
+                    imageFitMode === 'contain'
+                      ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-xs'
+                      : 'bg-white/20 hover:bg-white/30 text-white'
+                  }`}
+                  title={imageFitMode === 'contain' ? '현재: 얼굴/전체 잘림 방지 (원본 맞춤) -> 꽉 채움으로 변경' : '현재: 꽉 채움 -> 얼굴/전체 잘림 방지 (원본 맞춤)으로 변경'}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-pink-300" />
+                  <span>{imageFitMode === 'contain' ? '잘림 방지 (원본 맞춤)' : '화면 꽉 채움'}</span>
+                </button>
+
+                <div className="h-3.5 w-px bg-white/20" />
+
                 <button
                   type="button"
                   onClick={(e) => {
@@ -721,7 +777,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                   title="돋보기 (사진의 원하는 부분을 누르면 확대/축소)"
                 >
                   <ZoomIn className="w-4 h-4 text-pink-300 fill-pink-300/30" />
-                  <span>{zoomScale > 1 ? `돋보기 ${Math.round(zoomScale * 100)}% (축소)` : '돋보기 확대'}</span>
+                  <span>{zoomScale > 1 ? `돋보기 ${Math.round(zoomScale * 100)}%` : '돋보기'}</span>
                 </button>
 
                 <div className="flex items-center gap-1">
@@ -753,7 +809,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                       title="화면 맞춤 초기화"
                     >
                       <RotateCcw className="w-3 h-3" />
-                      <span>원본</span>
+                      <span>초기화</span>
                     </button>
                   )}
                 </div>
@@ -778,7 +834,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                   const cap = currentStory.imageCaptions?.[0];
                   return (
                     <div
-                      className={`relative w-full aspect-[16/10] sm:aspect-[16/9] bg-black overflow-hidden group flex items-center justify-center ${
+                      className={`relative w-full aspect-[16/10] sm:aspect-[16/9] min-h-[440px] sm:min-h-[560px] lg:min-h-[640px] bg-black overflow-hidden group flex items-center justify-center ${
                         zoomScale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in'
                       }`}
                       onClick={handlePhotoClick}
@@ -793,18 +849,20 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                       <SlidePhoto
                         src={photos[0]}
                         alt={currentStory.title}
+                        fitMode={imageFitMode}
+                        showBackdropBlur={true}
                         style={{
                           transform: `scale(${zoomScale}) translate(${zoomPan.x / zoomScale}px, ${zoomPan.y / zoomScale}px)`,
                           transition: isDragging ? 'none' : 'transform 0.2s ease-out'
                         }}
-                        className="w-full h-full object-cover pointer-events-none select-none"
+                        className="pointer-events-none select-none drop-shadow-2xl"
                       />
-                      <div className="absolute top-3 right-3 px-3 py-1 bg-black/70 backdrop-blur-md rounded-full text-xs font-extrabold text-white border border-white/20">
+                      <div className="absolute top-3 right-3 px-3 py-1 bg-black/70 backdrop-blur-md rounded-full text-xs font-extrabold text-white border border-white/20 z-20">
                         1/1
                       </div>
 
                       {cap && (
-                        <div className="absolute bottom-0 inset-x-0 p-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent text-white z-10">
+                        <div className="absolute bottom-0 inset-x-0 p-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent text-white z-20">
                           <p className="text-sm sm:text-base font-bold leading-relaxed text-pink-100">💬 {cap}</p>
                         </div>
                       )}
@@ -814,7 +872,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                           e.stopPropagation();
                           setZoomedImage(photos[0]);
                         }}
-                        className="absolute bottom-3 right-3 p-2.5 bg-black/70 rounded-full text-white opacity-80 hover:opacity-100 transition-opacity backdrop-blur-md border border-white/20 shadow-md z-10"
+                        className="absolute bottom-3 right-3 p-2.5 bg-black/70 rounded-full text-white opacity-80 hover:opacity-100 transition-opacity backdrop-blur-md border border-white/20 shadow-md z-20"
                         title="전체화면 크게 보기"
                       >
                         <ZoomIn className="w-5 h-5" />
@@ -868,7 +926,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                     {!isAllGridStep ? (
                       /* Individual Photo Step View with Free Zoom & Drag */
                       <div
-                        className={`relative w-full aspect-[16/10] sm:aspect-[16/9] bg-black overflow-hidden group flex items-center justify-center ${
+                        className={`relative w-full aspect-[16/10] sm:aspect-[16/9] min-h-[440px] sm:min-h-[560px] lg:min-h-[640px] bg-black overflow-hidden group flex items-center justify-center ${
                           zoomScale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in'
                         }`}
                         onClick={handlePhotoClick}
@@ -883,21 +941,23 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                         <SlidePhoto
                           src={photos[photoSubIndex]}
                           alt={`${currentStory.title} - 사진 ${photoSubIndex + 1}`}
+                          fitMode={imageFitMode}
+                          showBackdropBlur={true}
                           style={{
                             transform: `scale(${zoomScale}) translate(${zoomPan.x / zoomScale}px, ${zoomPan.y / zoomScale}px)`,
                             transition: isDragging ? 'none' : 'transform 0.2s ease-out'
                           }}
-                          className="w-full h-full object-cover pointer-events-none select-none"
+                          className="pointer-events-none select-none drop-shadow-2xl"
                         />
 
                         {/* Top Right Badge */}
-                        <div className="absolute top-3 right-3 px-3 py-1 bg-black/70 backdrop-blur-md rounded-full text-xs font-extrabold text-white border border-white/20">
+                        <div className="absolute top-3 right-3 px-3 py-1 bg-black/70 backdrop-blur-md rounded-full text-xs font-extrabold text-white border border-white/20 z-20">
                           사진 {photoSubIndex + 1} / {photos.length}
                         </div>
 
                         {/* Photo Caption Overlay */}
                         {currentStory.imageCaptions?.[photoSubIndex] && (
-                          <div className="absolute bottom-0 inset-x-0 p-4 sm:p-5 bg-gradient-to-t from-black/95 via-black/60 to-transparent text-white z-10">
+                          <div className="absolute bottom-0 inset-x-0 p-4 sm:p-5 bg-gradient-to-t from-black/95 via-black/60 to-transparent text-white z-20">
                             <p className="text-xs sm:text-sm font-extrabold text-pink-300 mb-0.5">
                               📷 사진 #{photoSubIndex + 1} 설명:
                             </p>
@@ -912,7 +972,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                             e.stopPropagation();
                             setZoomedImage(photos[photoSubIndex]);
                           }}
-                          className="absolute bottom-3 right-3 p-2.5 bg-black/70 rounded-full text-white opacity-80 hover:opacity-100 transition-opacity backdrop-blur-md border border-white/20 shadow-md z-10"
+                          className="absolute bottom-3 right-3 p-2.5 bg-black/70 rounded-full text-white opacity-80 hover:opacity-100 transition-opacity backdrop-blur-md border border-white/20 shadow-md z-20"
                           title="전체화면 크게 보기"
                         >
                           <ZoomIn className="w-5 h-5" />
@@ -943,12 +1003,14 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                                 src={imgUrl}
                                 alt={`${currentStory.studentName} - 사진 ${imgIdx + 1}`}
                                 fallbackIndex={imgIdx}
-                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 pointer-events-none select-none"
+                                fitMode="contain"
+                                showBackdropBlur={true}
+                                className="group-hover:scale-105 transition-transform duration-300 pointer-events-none select-none"
                               />
-                              <span className="absolute top-3 left-3 bg-black/80 backdrop-blur-md text-white text-xs sm:text-sm font-black px-3 py-1 rounded-full border border-white/20 shadow-md z-10">
+                              <span className="absolute top-3 left-3 bg-black/80 backdrop-blur-md text-white text-xs sm:text-sm font-black px-3 py-1 rounded-full border border-white/20 shadow-md z-20">
                                 #{imgIdx + 1}
                               </span>
-                              <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none z-10">
+                              <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none z-20">
                                 <span className="bg-black/70 text-white text-xs font-bold px-3 py-1.5 rounded-full border border-white/20 flex items-center gap-1.5 backdrop-blur-md">
                                   <ZoomIn className="w-4 h-4 text-pink-400" />
                                   <span>원본 크게 보기</span>

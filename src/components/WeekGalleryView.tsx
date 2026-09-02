@@ -162,17 +162,29 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
                 </div>
 
                 {/* Photo Grid Box */}
-                <div className="relative aspect-square bg-black overflow-hidden group/img cursor-pointer" onClick={() => onSelectForPresentation(story.week)}>
+                <div className="relative aspect-square bg-black overflow-hidden group/img cursor-pointer flex items-center justify-center" onClick={() => onSelectForPresentation(story.week)}>
                   {coverPhoto ? (
-                    <img
-                      src={coverPhoto}
-                      alt={story.title}
-                      onError={(e) => {
-                        e.currentTarget.onerror = null;
-                        e.currentTarget.src = eunsolBeachLaugh;
-                      }}
-                      className="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-500"
-                    />
+                    <>
+                      <img
+                        src={coverPhoto}
+                        alt=""
+                        aria-hidden="true"
+                        onError={(e) => {
+                          e.currentTarget.onerror = null;
+                          e.currentTarget.src = eunsolBeachLaugh;
+                        }}
+                        className="absolute inset-0 w-full h-full object-cover blur-xl opacity-35 scale-110 pointer-events-none"
+                      />
+                      <img
+                        src={coverPhoto}
+                        alt={story.title}
+                        onError={(e) => {
+                          e.currentTarget.onerror = null;
+                          e.currentTarget.src = eunsolBeachLaugh;
+                        }}
+                        className="relative z-10 max-h-full max-w-full object-contain group-hover/img:scale-105 transition-transform duration-500 drop-shadow-md"
+                      />
+                    </>
                   ) : (
                     <div className="w-full h-full bg-[#F5F5F5] flex items-center justify-center text-xs text-[#8E8E8E] font-bold">
                       사진 없음

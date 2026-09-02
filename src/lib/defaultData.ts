@@ -23,10 +23,10 @@ export const INITIAL_STORIES: StoryItem[] = [
     ],
     aiComment: '자연 속에서 가족과의 따뜻한 사랑과 협동심을 배운 최고의 여름방학 이야기입니다! 조개껍데기로 꾸민 모래성이 정말 동화 속 풍경 같아요. ✨🐚🌊',
     createdAt: new Date().toISOString(),
-    reactions: { '❤️': 24, '👏': 18, '⭐': 15 }
+    reactions: {
+      '❤️': 24,
+      '👏': 18,
+      '⭐': 15
+    }
   }
 ];
-
-
-
-
