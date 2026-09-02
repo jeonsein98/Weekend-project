@@ -91,7 +91,7 @@ const DEFAULT_FALLBACK_IMAGES = [
 ];
 
 interface SlidePhotoProps {
-  src: string;
+  src?: string;
   alt: string;
   style?: React.CSSProperties;
   className?: string;
@@ -109,15 +109,22 @@ const SlidePhoto: React.FC<SlidePhotoProps> = ({
   fitMode = 'contain',
   showBackdropBlur = true
 }) => {
-  const [currentSrc, setCurrentSrc] = useState(src);
+  const getInitialSrc = (inputSrc?: string, fbIdx = 0) => {
+    if (inputSrc && typeof inputSrc === 'string' && inputSrc.trim().length > 0) {
+      return inputSrc;
+    }
+    return DEFAULT_FALLBACK_IMAGES[fbIdx % DEFAULT_FALLBACK_IMAGES.length];
+  };
+
+  const [currentSrc, setCurrentSrc] = useState<string>(() => getInitialSrc(src, fallbackIndex));
   const [fallbackAttempt, setFallbackAttempt] = useState(0);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
-    setCurrentSrc(src);
+    setCurrentSrc(getInitialSrc(src, fallbackIndex));
     setHasError(false);
     setFallbackAttempt(0);
-  }, [src]);
+  }, [src, fallbackIndex]);
 
   const handleError = () => {
     if (fallbackAttempt < DEFAULT_FALLBACK_IMAGES.length) {
@@ -133,9 +140,10 @@ const SlidePhoto: React.FC<SlidePhotoProps> = ({
 
   if (hasError || !currentSrc) {
     return (
-      <div className="w-full h-full bg-[#141414] flex flex-col items-center justify-center p-6 text-center text-white/80">
+      <div className="w-full h-full bg-[#18181B] flex flex-col items-center justify-center p-6 text-center text-white/90">
         <Sparkles className="w-12 h-12 text-pink-400 mb-3 animate-pulse" />
-        <span className="text-sm font-bold">{alt || '사진을 불러올 수 없습니다'}</span>
+        <span className="text-base font-extrabold text-pink-200">{alt || '사진을 준비 중입니다'}</span>
+        <span className="text-xs text-white/50 mt-1">소중한 추억이 안전하게 보존되어 있습니다</span>
       </div>
     );
   }
@@ -816,18 +824,11 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
               </div>
 
               {(() => {
-                const photos = currentStory.imageUrls && currentStory.imageUrls.length > 0
+                const rawUrls = Array.isArray(currentStory.imageUrls)
                   ? currentStory.imageUrls
                   : (currentStory.imageUrl ? [currentStory.imageUrl] : []);
-
-                if (photos.length === 0) {
-                  return (
-                    <div className="w-full aspect-video bg-[#FAFAFA] flex flex-col items-center justify-center gap-3 text-[#8E8E8E] p-12">
-                      <User className="w-16 h-16 stroke-1 text-gray-400" />
-                      <span className="text-sm font-bold">등록된 사진이 없습니다.</span>
-                    </div>
-                  );
-                }
+                const validUrls = rawUrls.filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+                const photos = validUrls.length > 0 ? validUrls : [DEFAULT_FALLBACK_IMAGES[0]];
 
                 // If only 1 photo
                 if (photos.length === 1) {
@@ -990,34 +991,50 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                         </div>
 
                         <div className={`grid gap-2 p-1 bg-black w-full ${photos.length === 2 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 sm:grid-cols-3'}`}>
-                          {photos.map((imgUrl, imgIdx) => (
-                            <div
-                              key={imgIdx}
-                              className="relative w-full h-[450px] sm:h-[580px] lg:h-[680px] rounded-xl overflow-hidden bg-black border border-white/10 group cursor-pointer"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setZoomedImage(imgUrl);
-                              }}
-                            >
-                              <SlidePhoto
-                                src={imgUrl}
-                                alt={`${currentStory.studentName} - 사진 ${imgIdx + 1}`}
-                                fallbackIndex={imgIdx}
-                                fitMode="contain"
-                                showBackdropBlur={true}
-                                className="group-hover:scale-105 transition-transform duration-300 pointer-events-none select-none"
-                              />
-                              <span className="absolute top-3 left-3 bg-black/80 backdrop-blur-md text-white text-xs sm:text-sm font-black px-3 py-1 rounded-full border border-white/20 shadow-md z-20">
-                                #{imgIdx + 1}
-                              </span>
-                              <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none z-20">
-                                <span className="bg-black/70 text-white text-xs font-bold px-3 py-1.5 rounded-full border border-white/20 flex items-center gap-1.5 backdrop-blur-md">
-                                  <ZoomIn className="w-4 h-4 text-pink-400" />
-                                  <span>원본 크게 보기</span>
+                          {photos.map((imgUrl, imgIdx) => {
+                            const captionText = currentStory.imageCaptions?.[imgIdx];
+                            return (
+                              <div
+                                key={imgIdx}
+                                className="relative w-full h-[450px] sm:h-[580px] lg:h-[680px] rounded-xl overflow-hidden bg-black border border-white/10 group cursor-pointer flex flex-col"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setZoomedImage(imgUrl);
+                                }}
+                              >
+                                <SlidePhoto
+                                  src={imgUrl}
+                                  alt={`${currentStory.studentName} - 사진 ${imgIdx + 1}`}
+                                  fallbackIndex={imgIdx}
+                                  fitMode="contain"
+                                  showBackdropBlur={true}
+                                  className="group-hover:scale-105 transition-transform duration-300 pointer-events-none select-none"
+                                />
+                                <span className="absolute top-3 left-3 bg-black/80 backdrop-blur-md text-white text-xs sm:text-sm font-black px-3 py-1 rounded-full border border-white/20 shadow-md z-20">
+                                  #{imgIdx + 1}
                                 </span>
+                                <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none z-20">
+                                  <span className="bg-black/70 text-white text-xs font-bold px-3 py-1.5 rounded-full border border-white/20 flex items-center gap-1.5 backdrop-blur-md">
+                                    <ZoomIn className="w-4 h-4 text-pink-400" />
+                                    <span>원본 크게 보기</span>
+                                  </span>
+                                </div>
+
+                                {/* Parent's photo caption overlay below each photo card */}
+                                {captionText && (
+                                  <div className="absolute bottom-0 inset-x-0 p-3 sm:p-4 bg-gradient-to-t from-black/95 via-black/80 to-transparent text-white z-20 pointer-events-none">
+                                    <div className="flex items-center gap-1.5 text-pink-300 text-xs font-black mb-1">
+                                      <Sparkles className="w-3.5 h-3.5 fill-pink-300" />
+                                      <span>사진 #{imgIdx + 1} 설명</span>
+                                    </div>
+                                    <p className="text-xs sm:text-sm lg:text-base font-bold text-white leading-relaxed line-clamp-3 drop-shadow-md">
+                                      {captionText}
+                                    </p>
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}

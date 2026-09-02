@@ -273,7 +273,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
     });
   };
 
-  // Handle Image Upload (Max 3)
+  // Handle Image Upload (Max 3) - Strictly preserving selection order
   const handleFilesAdd = async (files: FileList | File[]) => {
     const fileArray = Array.from(files);
     if (imageUrls.length + fileArray.length > 3) {
@@ -282,10 +282,11 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
     }
 
     setIsUploadingPhoto(true);
-    let addedCount = 0;
+    const newProcessedUrls: string[] = [];
     try {
-      for (const file of fileArray) {
-        if (imageUrls.length + addedCount >= 3) break;
+      for (let i = 0; i < fileArray.length; i++) {
+        if (imageUrls.length + newProcessedUrls.length >= 3) break;
+        const file = fileArray[i];
         const dataUrl = await compressMobilePhoto(file);
         if (dataUrl) {
           let finalUrl = dataUrl;
@@ -295,7 +296,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 imageBase64: dataUrl,
-                name: `photo_${activeStudentName || 'child'}`
+                name: `photo_${activeStudentName || 'child'}_${Date.now()}_${i}`
               })
             });
             if (uploadRes.ok) {
@@ -307,18 +308,20 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
           } catch (uploadErr) {
             console.warn('Direct upload fallback:', uploadErr);
           }
-
-          setImageUrls((prev) => (prev.length >= 3 ? prev : [...prev, finalUrl]));
-          setImageCaptions((prev) => (prev.length >= 3 ? prev : [...prev, '']));
-          addedCount++;
+          newProcessedUrls.push(finalUrl);
         }
+      }
+
+      if (newProcessedUrls.length > 0) {
+        setImageUrls((prev) => [...prev, ...newProcessedUrls].slice(0, 3));
+        setImageCaptions((prev) => {
+          const newCaps = new Array(newProcessedUrls.length).fill('');
+          return [...prev, ...newCaps].slice(0, 3);
+        });
+        onShowToast(`${newProcessedUrls.length}장의 사진이 선택하신 순서대로 첨부되었습니다!`, 'success');
       }
     } finally {
       setIsUploadingPhoto(false);
-    }
-
-    if (addedCount > 0) {
-      onShowToast(`${addedCount}장의 사진이 첨부되었습니다! 맨 아래 [Instagram 스타일 게시하기] 버튼을 꼭 눌러주세요.`, 'info');
     }
   };
 
@@ -876,10 +879,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                 <ImageIcon className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <p>
-                    <strong>사진 업로드 안내:</strong> 유치원 발표 시 아이가 더 자신감 있게 발표할 수 있도록 <u className="text-pink-700 decoration-pink-400 font-extrabold">최대한 아이의 얼굴이 잘 보이고 장소가 잘 드러나는 사진</u>을 첨부해 주세요!
-                  </p>
-                  <p className="text-[11px] text-pink-700 font-semibold flex items-center gap-1 mt-0.5">
-                    <span>🔒</span> 학부모님이 올리신 사진과 이야기는 서버에 영구 보존되며, 직접 삭제하기 전까지 안전하게 유지됩니다.
+                    <strong>사진 순서 및 업로드 안내:</strong> 사진은 <u className="text-pink-700 decoration-pink-400 font-extrabold">선택하신 순서대로 #1, #2, #3으로 배치</u>됩니다. 순서를 바꾸고 싶으실 땐 각 사진의 ◀ ▶ 버튼으로 언제든 변경하실 수 있습니다.
                   </p>
                 </div>
               </div>

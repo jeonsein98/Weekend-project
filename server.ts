@@ -89,10 +89,20 @@ function readStories(): any[] {
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed) && parsed.length > 0) {
         const filtered = parsed.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
-        if (filtered.length !== parsed.length) {
-          writeStories(filtered);
+        let changed = filtered.length !== parsed.length;
+        const processed = filtered.map((s: any) => {
+          const hasBase64 = (s.imageUrls || []).some((u: string) => typeof u === 'string' && u.startsWith('data:')) || (s.imageUrl && s.imageUrl.startsWith('data:'));
+          if (hasBase64) {
+            changed = true;
+            return processStoryImages(s);
+          }
+          return s;
+        });
+
+        if (changed) {
+          writeStories(processed);
         }
-        return filtered.length > 0 ? filtered : DEFAULT_INITIAL_STORIES;
+        return processed.length > 0 ? processed : DEFAULT_INITIAL_STORIES;
       }
     }
   } catch (err) {
@@ -167,20 +177,24 @@ function writeRoster(roster: any[]): boolean {
 
 function saveBase64Image(base64Str: string, prefix = 'photo'): string {
   if (!base64Str || typeof base64Str !== 'string') return '';
-  if (!base64Str.startsWith('data:image/')) {
+  if (!base64Str.startsWith('data:')) {
     return base64Str;
   }
   try {
-    const matches = base64Str.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
-    if (!matches || matches.length < 3) {
-      return base64Str;
-    }
-    let ext = matches[1].toLowerCase();
-    if (ext === 'jpeg') ext = 'jpg';
-    if (ext === 'svg+xml') ext = 'svg';
+    const commaIdx = base64Str.indexOf(',');
+    if (commaIdx === -1) return base64Str;
 
-    const buffer = Buffer.from(matches[2], 'base64');
-    const safePrefix = prefix.replace(/[^a-zA-Z0-9가-힣_-]/g, '_');
+    const header = base64Str.substring(0, commaIdx);
+    const rawData = base64Str.substring(commaIdx + 1);
+
+    let ext = 'jpg';
+    if (header.includes('image/png')) ext = 'png';
+    else if (header.includes('image/webp')) ext = 'webp';
+    else if (header.includes('image/gif')) ext = 'gif';
+    else if (header.includes('image/svg')) ext = 'svg';
+
+    const buffer = Buffer.from(rawData, 'base64');
+    const safePrefix = (prefix || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
     const filename = `${safePrefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
     fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
     return `/uploads/${filename}`;
@@ -191,16 +205,22 @@ function saveBase64Image(base64Str: string, prefix = 'photo'): string {
 }
 
 function processStoryImages(story: any): any {
+  if (!story) return story;
   const cloned = { ...story };
   let urls = Array.isArray(cloned.imageUrls) ? [...cloned.imageUrls] : (cloned.imageUrl ? [cloned.imageUrl] : []);
-  urls = urls.map((url: string, idx: number) => {
-    if (typeof url === 'string' && url.startsWith('data:image/')) {
-      return saveBase64Image(url, `story_${cloned.studentName || 'child'}_${idx + 1}`);
-    }
-    return url;
-  });
+  
+  // Clean up and convert any data URLs to permanent disk files
+  urls = urls
+    .filter((u: any) => typeof u === 'string' && u.trim().length > 0)
+    .map((url: string, idx: number) => {
+      if (url.startsWith('data:')) {
+        return saveBase64Image(url, `story_${cloned.studentName || 'child'}_${idx + 1}`);
+      }
+      return url;
+    });
+
   cloned.imageUrls = urls;
-  cloned.imageUrl = urls[0] || '';
+  cloned.imageUrl = urls[0] || (cloned.imageUrl?.startsWith('data:') ? saveBase64Image(cloned.imageUrl, `story_${cloned.studentName || 'child'}_cover`) : cloned.imageUrl) || '';
   return cloned;
 }
 

@@ -131,10 +131,11 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-5">
           {filteredStories.map((story) => {
-            const photos = story.imageUrls && story.imageUrls.length > 0
+            const rawPhotos = story.imageUrls && story.imageUrls.length > 0
               ? story.imageUrls
               : (story.imageUrl ? [story.imageUrl] : []);
-            const coverPhoto = photos[0];
+            const photos = rawPhotos.filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+            const coverPhoto = photos[0] || eunsolBeachLaugh;
             const totalReactions = (Object.values(story.reactions || {}) as (number | string)[]).reduce<number>((acc, curr) => acc + (Number(curr) || 0), 0);
 
             return (

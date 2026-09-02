@@ -439,6 +439,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     const toProcess = fileArr.slice(0, remainingSlots);
 
     setIsProxyUploading(true);
+    const newProxyUrls: string[] = [];
     try {
       for (const f of toProcess) {
         const compressed = await compressImageFile(f);
@@ -460,10 +461,17 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         } catch (uploadErr) {
           // fallback to base64
         }
-        setProxyImages((prev) => (prev.length >= 3 ? prev : [...prev, finalUrl]));
-        setProxyCaptions((prev) => (prev.length >= 3 ? prev : [...prev, '']));
+        newProxyUrls.push(finalUrl);
       }
-      onShowToast(`${toProcess.length}장의 사진이 추가되었습니다.`, 'info');
+
+      if (newProxyUrls.length > 0) {
+        setProxyImages((prev) => [...prev, ...newProxyUrls].slice(0, 3));
+        setProxyCaptions((prev) => {
+          const newCaps = new Array(newProxyUrls.length).fill('');
+          return [...prev, ...newCaps].slice(0, 3);
+        });
+        onShowToast(`${newProxyUrls.length}장의 사진이 선택 순서대로 추가되었습니다.`, 'info');
+      }
     } finally {
       setIsProxyUploading(false);
     }

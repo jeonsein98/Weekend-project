@@ -85,11 +85,21 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
     console.warn('[Storage] IDB read skipped:', idbErr);
   }
 
-  // Aggregate all known client stories
+  // Aggregate all known client stories - Prioritize versions with valid image URLs
   const clientMap = new Map<string, StoryItem>();
-  for (const s of [...localStories, ...idbStories]) {
+  for (const s of localStories) {
     if (s && s.id && s.studentName && !BANNED_MOCK_STORY_IDS.has(s.id)) {
       clientMap.set(s.id, s);
+    }
+  }
+  for (const s of idbStories) {
+    if (s && s.id && s.studentName && !BANNED_MOCK_STORY_IDS.has(s.id)) {
+      const existing = clientMap.get(s.id);
+      const sImgs = (s.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+      const exImgs = (existing?.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+      if (!existing || sImgs.length >= exImgs.length) {
+        clientMap.set(s.id, s);
+      }
     }
   }
   const allClientStories = Array.from(clientMap.values());
@@ -133,15 +143,31 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
         // Non-destructive bidirectional merge: NEVER wipe client stories if sync was delayed
         const mergedList = [...serverStories];
         for (const cStory of allClientStories) {
-          if (cStory.id !== 'demo-eunsol' && !BANNED_MOCK_STORY_IDS.has(cStory.id) && !mergedList.some(s => s.id === cStory.id || (s.studentName === cStory.studentName && s.week === cStory.week))) {
+          if (
+            cStory.id !== 'demo-eunsol' &&
+            !BANNED_MOCK_STORY_IDS.has(cStory.id) &&
+            !mergedList.some(s => s.id === cStory.id || (s.studentName === cStory.studentName && s.week === cStory.week))
+          ) {
             mergedList.push(cStory);
           }
         }
 
+        // Clean each story's imageUrls so that only non-empty strings are kept
+        const cleanedList = mergedList.map(item => {
+          const rawUrls = Array.isArray(item.imageUrls) ? item.imageUrls : (item.imageUrl ? [item.imageUrl] : []);
+          const validUrls = rawUrls.filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+          const fallbackCover = validUrls[0] || (typeof item.imageUrl === 'string' && item.imageUrl.trim().length > 0 ? item.imageUrl : '/uploads/eunsol_beach_laugh.jpg');
+          return {
+            ...item,
+            imageUrls: validUrls.length > 0 ? validUrls : [fallbackCover],
+            imageUrl: fallbackCover
+          };
+        });
+
         // Cache clean merged data locally and into IndexedDB
-        saveLocalStories(mergedList);
-        saveAllStoriesToIndexedDB(mergedList);
-        return mergedList;
+        saveLocalStories(cleanedList);
+        saveAllStoriesToIndexedDB(cleanedList);
+        return cleanedList;
       }
     }
   } catch (err) {
@@ -516,14 +542,14 @@ export function getLocalStories(): StoryItem[] {
       const normalized = parsed
         .filter((item: any) => item && item.id && !BANNED_MOCK_STORY_IDS.has(item.id))
         .map((item: any) => {
-          let urls = item.imageUrls && Array.isArray(item.imageUrls) && item.imageUrls.length > 0
-            ? item.imageUrls
-            : (item.imageUrl ? [item.imageUrl] : []);
+          const rawUrls = Array.isArray(item.imageUrls) ? item.imageUrls : (item.imageUrl ? [item.imageUrl] : []);
+          const validUrls = rawUrls.filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+          const fallbackCover = validUrls[0] || (typeof item.imageUrl === 'string' && item.imageUrl.trim().length > 0 ? item.imageUrl : '/uploads/eunsol_beach_laugh.jpg');
 
           return {
             ...item,
-            imageUrl: urls[0] || (INITIAL_STORIES[0]?.imageUrls[0] || '/uploads/eunsol_beach_laugh.jpg'),
-            imageUrls: urls
+            imageUrl: fallbackCover,
+            imageUrls: validUrls.length > 0 ? validUrls : [fallbackCover]
           };
         });
 
@@ -543,15 +569,19 @@ export function saveLocalStories(stories: StoryItem[]): void {
   try {
     localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(stories));
   } catch (e) {
-    console.warn('localStorage save warning (Quota reached). Full photos safely preserved in IndexedDB & server.', e);
+    console.warn('localStorage save warning (Quota reached). Safely managing lightweight metadata in localStorage.', e);
     try {
-      // Light fallback: store without raw base64 data to avoid QuotaExceededError in localStorage,
-      // while IndexedDB keeps the full base64 photos intact!
-      const lightweight = stories.map((s) => ({
-        ...s,
-        imageUrls: (s.imageUrls || []).map((u) => (u.startsWith('data:image/') ? '' : u)),
-        imageUrl: s.imageUrl?.startsWith('data:image/') ? '' : s.imageUrl
-      }));
+      // If quota exceeded, do NOT delete or empty the imageUrls completely!
+      // If an image URL is a long base64 string, compress it or truncate to a marker, but NEVER lose server /uploads/ URLs (which are short and never cause quota issues).
+      const lightweight = stories.map((s) => {
+        const urls = (s.imageUrls || []).map((u) => (u && u.startsWith('data:image/') && u.length > 500 ? '' : u));
+        const filteredUrls = urls.filter((u) => u && u.length > 0);
+        return {
+          ...s,
+          imageUrls: filteredUrls.length > 0 ? filteredUrls : (s.imageUrls || []),
+          imageUrl: s.imageUrl && s.imageUrl.startsWith('data:image/') && s.imageUrl.length > 500 ? (filteredUrls[0] || '') : s.imageUrl
+        };
+      });
       localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(lightweight));
     } catch (ignore) {
       // IndexedDB and Server hold the real source of truth
