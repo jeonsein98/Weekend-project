@@ -72,8 +72,41 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           if (data && data.success && Array.isArray(data.stories)) {
-            setStories(data.stories);
-            saveLocalStories(data.stories);
+            setStories((prev) => {
+              const map = new Map<string, StoryItem>();
+              for (const s of prev) {
+                if (s && s.studentName) {
+                  const k = `${s.studentName}_${s.week || '전체'}`;
+                  map.set(k, s);
+                  if (s.id) map.set(s.id, s);
+                }
+              }
+              for (const s of data.stories as StoryItem[]) {
+                if (s && s.studentName) {
+                  const k = `${s.studentName}_${s.week || '전체'}`;
+                  const existing = map.get(k) || (s.id ? map.get(s.id) : undefined);
+                  if (!existing) {
+                    map.set(k, s);
+                    if (s.id) map.set(s.id, s);
+                  } else {
+                    const exPhotos = (existing.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+                    const newPhotos = (s.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+                    const bestPhotos = newPhotos.length >= exPhotos.length ? newPhotos : exPhotos;
+                    const merged: StoryItem = {
+                      ...existing,
+                      ...s,
+                      imageUrls: bestPhotos,
+                      imageUrl: bestPhotos[0] || s.imageUrl || existing.imageUrl || ''
+                    };
+                    map.set(k, merged);
+                    if (merged.id) map.set(merged.id, merged);
+                  }
+                }
+              }
+              const finalStories = Array.from(new Set(map.values()));
+              saveLocalStories(finalStories);
+              return finalStories;
+            });
           }
         }
       } catch (err) {

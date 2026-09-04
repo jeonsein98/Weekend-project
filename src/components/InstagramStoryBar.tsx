@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { RosterStudent, StoryItem, isWeekMatch } from '../types';
 import { Users, Sparkles, UserCheck } from 'lucide-react';
+import { findPhotoForStudent } from '../lib/idb';
 
 interface InstagramStoryBarProps {
   stories: StoryItem[];
@@ -17,16 +18,39 @@ const StudentStoryAvatar: React.FC<{ photoUrl?: string; studentName: string }> =
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
-    setCurrentUrl(photoUrl);
-    setHasError(false);
-  }, [photoUrl]);
+    if (!photoUrl || photoUrl.startsWith('idb:')) {
+      findPhotoForStudent(studentName).then((cached) => {
+        if (cached) {
+          setCurrentUrl(cached);
+          setHasError(false);
+        } else {
+          setCurrentUrl(photoUrl?.startsWith('idb:') ? undefined : photoUrl);
+        }
+      });
+    } else {
+      setCurrentUrl(photoUrl);
+      setHasError(false);
+    }
+  }, [photoUrl, studentName]);
+
+  const handleAvatarError = async () => {
+    try {
+      const cached = await findPhotoForStudent(studentName);
+      if (cached && cached !== currentUrl) {
+        setCurrentUrl(cached);
+        setHasError(false);
+        return;
+      }
+    } catch {}
+    setHasError(true);
+  };
 
   if (currentUrl && !hasError) {
     return (
       <img
         src={currentUrl}
         alt=""
-        onError={() => setHasError(true)}
+        onError={handleAvatarError}
         className="w-full h-full object-cover rounded-full"
       />
     );

@@ -32,6 +32,7 @@ import { StoryItem, RosterStudent, WEEKS_LIST, isWeekMatch } from '../types';
 import { InstagramStoryBar } from './InstagramStoryBar';
 import { WeekTabBar } from './WeekTabBar';
 import { RefreshCw, Camera } from 'lucide-react';
+import { findPhotoForStudent } from '../lib/idb';
 
 interface SlidePresentationViewProps {
   stories: StoryItem[];
@@ -49,16 +50,39 @@ const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ pho
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
-    setCurrentUrl(photoUrl);
-    setHasError(false);
-  }, [photoUrl]);
+    if (!photoUrl || photoUrl.startsWith('idb:')) {
+      findPhotoForStudent(studentName).then((cached) => {
+        if (cached) {
+          setCurrentUrl(cached);
+          setHasError(false);
+        } else {
+          setCurrentUrl(photoUrl?.startsWith('idb:') ? undefined : photoUrl);
+        }
+      });
+    } else {
+      setCurrentUrl(photoUrl);
+      setHasError(false);
+    }
+  }, [photoUrl, studentName]);
+
+  const handleAvatarError = async () => {
+    try {
+      const cached = await findPhotoForStudent(studentName);
+      if (cached && cached !== currentUrl) {
+        setCurrentUrl(cached);
+        setHasError(false);
+        return;
+      }
+    } catch {}
+    setHasError(true);
+  };
 
   if (currentUrl && !hasError) {
     return (
       <img
         src={currentUrl}
         alt=""
-        onError={() => setHasError(true)}
+        onError={handleAvatarError}
         className="w-full h-full object-cover rounded-full"
       />
     );
@@ -76,6 +100,7 @@ const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ pho
 interface SlidePhotoProps {
   src?: string;
   alt: string;
+  studentName?: string;
   style?: React.CSSProperties;
   className?: string;
   fallbackIndex?: number;
@@ -86,6 +111,7 @@ interface SlidePhotoProps {
 const SlidePhoto: React.FC<SlidePhotoProps> = ({
   src,
   alt,
+  studentName,
   style,
   className,
   fitMode = 'contain',
@@ -94,15 +120,50 @@ const SlidePhoto: React.FC<SlidePhotoProps> = ({
   const [currentSrc, setCurrentSrc] = useState<string | undefined>(src);
   const [retryCount, setRetryCount] = useState(0);
   const [hasError, setHasError] = useState(false);
+  const [isSelfHealing, setIsSelfHealing] = useState(false);
 
   useEffect(() => {
-    setCurrentSrc(src);
-    setRetryCount(0);
-    setHasError(false);
-  }, [src]);
+    if (!src || src.startsWith('idb:')) {
+      if (studentName) {
+        findPhotoForStudent(studentName).then((cached) => {
+          if (cached) {
+            setCurrentSrc(cached);
+            setHasError(false);
+          } else {
+            setCurrentSrc(src?.startsWith('idb:') ? undefined : src);
+          }
+        });
+      }
+    } else {
+      setCurrentSrc(src);
+      setRetryCount(0);
+      setHasError(false);
+    }
+  }, [src, studentName]);
 
-  const handleError = () => {
-    if (retryCount < 2 && src) {
+  const handleError = async () => {
+    if (!isSelfHealing && studentName) {
+      setIsSelfHealing(true);
+      try {
+        const idbPhoto = await findPhotoForStudent(studentName);
+        if (idbPhoto && idbPhoto !== currentSrc) {
+          setCurrentSrc(idbPhoto);
+          setHasError(false);
+          // Restore on server in background
+          fetch('/api/upload-photo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              imageBase64: idbPhoto,
+              name: `repaired_${studentName}_${Date.now()}`
+            })
+          }).catch(() => {});
+          return;
+        }
+      } catch {}
+    }
+
+    if (retryCount < 2 && src && !src.startsWith('data:')) {
       setRetryCount((prev) => prev + 1);
       setTimeout(() => {
         const sep = src.includes('?') ? '&' : '?';
@@ -840,6 +901,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                       <SlidePhoto
                         src={photos[0]}
                         alt={currentStory.title}
+                        studentName={currentStory.studentName}
                         fitMode={imageFitMode}
                         showBackdropBlur={true}
                         style={{
@@ -932,6 +994,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                         <SlidePhoto
                           src={photos[photoSubIndex]}
                           alt={`${currentStory.title} - 사진 ${photoSubIndex + 1}`}
+                          studentName={currentStory.studentName}
                           fitMode={imageFitMode}
                           showBackdropBlur={true}
                           style={{
@@ -995,6 +1058,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                                 <SlidePhoto
                                   src={imgUrl}
                                   alt={`${currentStory.studentName} - 사진 ${imgIdx + 1}`}
+                                  studentName={currentStory.studentName}
                                   fallbackIndex={imgIdx}
                                   fitMode="contain"
                                   showBackdropBlur={true}

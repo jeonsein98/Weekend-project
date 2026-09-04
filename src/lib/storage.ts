@@ -6,7 +6,9 @@ import {
   getAllStoriesFromIndexedDB,
   deleteStoryFromIndexedDB,
   saveRosterToIndexedDB,
-  getRosterFromIndexedDB
+  getRosterFromIndexedDB,
+  getAllDraftsFromIndexedDB,
+  getAllPhotosFromIndexedDB
 } from './idb';
 
 const STORAGE_KEY_STORIES = 'weekend_stories_data_v1';
@@ -87,22 +89,22 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
 
   // Aggregate all known client stories - Prioritize versions with valid image URLs
   const clientMap = new Map<string, StoryItem>();
-  for (const s of localStories) {
-    if (s && s.id && s.studentName && !BANNED_MOCK_STORY_IDS.has(s.id)) {
-      clientMap.set(s.id, s);
+  const addOrUpdateClient = (s: StoryItem) => {
+    if (!s || !s.studentName || BANNED_MOCK_STORY_IDS.has(s.id)) return;
+    const key = `${s.studentName}_${s.week || '전체'}`;
+    const existing = clientMap.get(key) || (s.id ? clientMap.get(s.id) : undefined);
+    const sImgs = (s.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+    const exImgs = (existing?.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+    if (!existing || sImgs.length >= exImgs.length) {
+      clientMap.set(key, s);
+      if (s.id) clientMap.set(s.id, s);
     }
-  }
-  for (const s of idbStories) {
-    if (s && s.id && s.studentName && !BANNED_MOCK_STORY_IDS.has(s.id)) {
-      const existing = clientMap.get(s.id);
-      const sImgs = (s.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
-      const exImgs = (existing?.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
-      if (!existing || sImgs.length >= exImgs.length) {
-        clientMap.set(s.id, s);
-      }
-    }
-  }
-  const allClientStories = Array.from(clientMap.values());
+  };
+
+  for (const s of localStories) addOrUpdateClient(s);
+  for (const s of idbStories) addOrUpdateClient(s);
+
+  const allClientStories = Array.from(new Set(clientMap.values()));
 
   try {
     const res = await fetch('/api/stories');
@@ -111,23 +113,60 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
       if (data && data.success && Array.isArray(data.stories)) {
         let serverStories: StoryItem[] = data.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
 
-        // Identify any client stories missing from the server (excluding demo data & banned mock items)
-        const missingOnServer = allClientStories.filter(
-          (clientStory) =>
-            clientStory.id !== 'demo-eunsol' &&
-            !BANNED_MOCK_STORY_IDS.has(clientStory.id) &&
-            !serverStories.some(
-              (s) => s.id === clientStory.id || (s.studentName === clientStory.studentName && s.week === clientStory.week)
-            )
-        );
+        // Intelligent map merge: index all server stories by key and id
+        const mergedMap = new Map<string, StoryItem>();
+        for (const s of serverStories) {
+          if (s && s.studentName) {
+            const key = `${s.studentName}_${s.week || '전체'}`;
+            mergedMap.set(key, s);
+            if (s.id) mergedMap.set(s.id, s);
+          }
+        }
 
-        if (missingOnServer.length > 0) {
+        // Merge all client stories into mergedMap: never drop photos!
+        for (const cStory of allClientStories) {
+          if (!cStory || !cStory.studentName || BANNED_MOCK_STORY_IDS.has(cStory.id)) continue;
+          const key = `${cStory.studentName}_${cStory.week || '전체'}`;
+          const existing = mergedMap.get(key) || (cStory.id ? mergedMap.get(cStory.id) : undefined);
+
+          if (!existing) {
+            mergedMap.set(key, cStory);
+            if (cStory.id) mergedMap.set(cStory.id, cStory);
+          } else {
+            const existingUrls = (existing.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+            const clientUrls = (cStory.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+            const bestUrls = clientUrls.length >= existingUrls.length ? clientUrls : existingUrls;
+            const mergedItem: StoryItem = {
+              ...existing,
+              ...cStory,
+              title: cStory.title || existing.title,
+              content: cStory.content || existing.content,
+              imageUrls: bestUrls,
+              imageUrl: bestUrls[0] || cStory.imageUrl || existing.imageUrl || ''
+            };
+            mergedMap.set(key, mergedItem);
+            if (mergedItem.id) mergedMap.set(mergedItem.id, mergedItem);
+          }
+        }
+
+        const mergedList = Array.from(new Set(mergedMap.values()));
+
+        // Identify any client stories missing from or needing photo repair on the server
+        const needServerSync = mergedList.filter((m) => {
+          const onServer = serverStories.find(s => s.id === m.id || (s.studentName === m.studentName && s.week === m.week));
+          if (!onServer) return true;
+          const onServerPhotos = (onServer.imageUrls || []).filter(u => typeof u === 'string' && u.trim().length > 0);
+          const mPhotos = (m.imageUrls || []).filter(u => typeof u === 'string' && u.trim().length > 0);
+          return mPhotos.length > onServerPhotos.length;
+        });
+
+        if (needServerSync.length > 0) {
           try {
-            console.log(`[Storage] Auto-recovering ${missingOnServer.length} client stories to server disk...`);
+            console.log(`[Storage] Auto-syncing ${needServerSync.length} stories/photos to server disk...`);
             const syncRes = await fetch('/api/stories/bulk-sync', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ stories: missingOnServer })
+              body: JSON.stringify({ stories: needServerSync })
             });
             if (syncRes.ok) {
               const syncData = await syncRes.json();
@@ -137,18 +176,6 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
             }
           } catch (syncErr) {
             console.warn('[Storage] Auto recovery sync non-critical warning:', syncErr);
-          }
-        }
-
-        // Non-destructive bidirectional merge: NEVER wipe client stories if sync was delayed
-        const mergedList = [...serverStories];
-        for (const cStory of allClientStories) {
-          if (
-            cStory.id !== 'demo-eunsol' &&
-            !BANNED_MOCK_STORY_IDS.has(cStory.id) &&
-            !mergedList.some(s => s.id === cStory.id || (s.studentName === cStory.studentName && s.week === cStory.week))
-          ) {
-            mergedList.push(cStory);
           }
         }
 
@@ -526,7 +553,7 @@ export async function scanAndRecoverBrowserStories(): Promise<{ recoveredStories
     console.warn('[Storage] scan stories localStorage err:', lsErr);
   }
 
-  // 2. Scan IndexedDB
+  // 2. Scan IndexedDB Stories
   try {
     const idbStories = await getAllStoriesFromIndexedDB();
     for (const item of idbStories) {
@@ -554,16 +581,103 @@ export async function scanAndRecoverBrowserStories(): Promise<{ recoveredStories
             : ''
         );
 
-        recoveredMap.set(item.id, {
-          ...item,
-          imageUrls: validUrls,
-          imageUrl: cleanCover
-        });
-        sourceDescriptions.push(`IndexedDB stories - ${item.studentName} (${item.title || '제목 없음'})`);
+        const storyId = item.id || `recovered-idb-${item.studentName}-${item.week}`;
+        const existing = recoveredMap.get(storyId);
+        const existingUrls = (existing?.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+        if (!existing || validUrls.length >= existingUrls.length) {
+          recoveredMap.set(storyId, {
+            ...item,
+            id: storyId,
+            imageUrls: validUrls,
+            imageUrl: cleanCover
+          });
+          sourceDescriptions.push(`IndexedDB stories - ${item.studentName} (${item.title || '제목 없음'})`);
+        }
       }
     }
   } catch (idbErr) {
     console.warn('[Storage] scan stories IDB err:', idbErr);
+  }
+
+  // 3. Scan IndexedDB Drafts (Parent photo submission drafts)
+  try {
+    const drafts = await getAllDraftsFromIndexedDB();
+    for (const { studentName, draft } of drafts) {
+      if (!studentName || !draft) continue;
+      const rawUrls = Array.isArray(draft.imageUrls) ? draft.imageUrls : [];
+      const validUrls = rawUrls.filter((u: any) =>
+        typeof u === 'string' &&
+        u.trim().length > 0 &&
+        !u.includes('eunsol_beach_laugh') &&
+        !u.includes('eunsol_sandcastle') &&
+        !u.includes('eunsol_family_sunset')
+      );
+
+      if (validUrls.length > 0) {
+        // Find existing story for this student or create a recovered story
+        let matched: StoryItem | undefined;
+        for (const s of recoveredMap.values()) {
+          if (s.studentName === studentName && (!draft.week || s.week === draft.week)) {
+            matched = s;
+            break;
+          }
+        }
+
+        if (matched) {
+          const currentPhotos = (matched.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+          if (validUrls.length > currentPhotos.length) {
+            matched.imageUrls = validUrls;
+            matched.imageUrl = validUrls[0] || matched.imageUrl;
+            sourceDescriptions.push(`IndexedDB Drafts [Photos Recovered] - ${studentName}`);
+          }
+        } else {
+          const draftStoryId = `recovered-draft-${studentName}-${Date.now()}`;
+          recoveredMap.set(draftStoryId, {
+            id: draftStoryId,
+            studentName,
+            week: draft.week || '9월 1주차',
+            title: `${studentName}의 주말 이야기`,
+            content: '주말 동안 찍은 소중한 사진입니다.',
+            imageUrl: validUrls[0] || '',
+            imageUrls: validUrls,
+            imageCaptions: draft.imageCaptions || [],
+            aiComment: draft.aiComment || '',
+            reactions: {},
+            createdAt: new Date().toISOString()
+          });
+          sourceDescriptions.push(`IndexedDB Draft - ${studentName} (사진 ${validUrls.length}장 복구됨)`);
+        }
+      }
+    }
+  } catch (draftErr) {
+    console.warn('[Storage] scan drafts err:', draftErr);
+  }
+
+  // 4. Scan IndexedDB Photo Archive
+  try {
+    const photoList = await getAllPhotosFromIndexedDB();
+    for (const photo of photoList) {
+      if (!photo || !photo.studentName || !photo.dataUrl) continue;
+      if (
+        photo.dataUrl.includes('eunsol_beach_laugh') ||
+        photo.dataUrl.includes('eunsol_sandcastle') ||
+        photo.dataUrl.includes('eunsol_family_sunset')
+      ) continue;
+
+      // Find story matching this student
+      for (const s of recoveredMap.values()) {
+        if (s.studentName === photo.studentName && (!photo.week || s.week === photo.week)) {
+          const urls = (s.imageUrls || []).filter(u => typeof u === 'string' && u.trim().length > 0);
+          if (!urls.includes(photo.dataUrl)) {
+            s.imageUrls = [...urls, photo.dataUrl];
+            s.imageUrl = s.imageUrl || photo.dataUrl;
+            sourceDescriptions.push(`IndexedDB Photo Archive [Photo Recovered] - ${photo.studentName}`);
+          }
+        }
+      }
+    }
+  } catch (photoErr) {
+    console.warn('[Storage] scan photo archive err:', photoErr);
   }
 
   const recoveredList = Array.from(recoveredMap.values());
@@ -719,29 +833,33 @@ export function getLocalStories(): StoryItem[] {
 }
 
 export function saveLocalStories(stories: StoryItem[]): void {
-  // Always persist all stories with full image fidelity to IndexedDB (no 5MB storage limit)
+  // 1. Always persist all stories with full image fidelity to IndexedDB (no 5MB browser storage limit)
   saveAllStoriesToIndexedDB(stories).catch(() => {});
 
   try {
-    localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(stories));
-  } catch (e) {
-    console.warn('localStorage save warning (Quota reached). Safely managing lightweight metadata in localStorage.', e);
-    try {
-      // If quota exceeded, do NOT delete or empty the imageUrls completely!
-      // If an image URL is a long base64 string, compress it or truncate to a marker, but NEVER lose server /uploads/ URLs (which are short and never cause quota issues).
-      const lightweight = stories.map((s) => {
-        const urls = (s.imageUrls || []).map((u) => (u && u.startsWith('data:image/') && u.length > 500 ? '' : u));
-        const filteredUrls = urls.filter((u) => u && u.length > 0);
-        return {
-          ...s,
-          imageUrls: filteredUrls.length > 0 ? filteredUrls : (s.imageUrls || []),
-          imageUrl: s.imageUrl && s.imageUrl.startsWith('data:image/') && s.imageUrl.length > 500 ? (filteredUrls[0] || '') : s.imageUrl
-        };
+    // 2. Prepare safe lightweight payload for localStorage (never store giant base64 in localStorage)
+    // Server URLs (/uploads/...) are already short and kept as-is.
+    const lightweight = stories.map((s) => {
+      const urls = (s.imageUrls || []).map((u, idx) => {
+        if (typeof u === 'string' && u.startsWith('data:image/') && u.length > 200) {
+          return `idb:photo_${s.studentName}_${s.week}_${idx}`;
+        }
+        return u;
       });
-      localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(lightweight));
-    } catch (ignore) {
-      // IndexedDB and Server hold the real source of truth
-    }
+      const cover = typeof s.imageUrl === 'string' && s.imageUrl.startsWith('data:image/') && s.imageUrl.length > 200
+        ? (urls[0] || `idb:photo_${s.studentName}_${s.week}_0`)
+        : s.imageUrl;
+
+      return {
+        ...s,
+        imageUrls: urls,
+        imageUrl: cover
+      };
+    });
+
+    localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(lightweight));
+  } catch (e) {
+    console.warn('[Storage] localStorage save note (quota managed): full fidelity safely preserved in IndexedDB.', e);
   }
 }
 

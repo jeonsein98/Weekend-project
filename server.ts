@@ -22,24 +22,37 @@ const ROSTER_FILE = path.join(DATA_DIR, 'roster.json');
 const ROSTER_BACKUP_FILE = path.join(DATA_DIR, 'roster.backup.json');
 const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
 const DIST_UPLOADS_DIR = path.join(process.cwd(), 'dist', 'uploads');
+const DATA_UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(DATA_UPLOADS_DIR)) fs.mkdirSync(DATA_UPLOADS_DIR, { recursive: true });
 if (!fs.existsSync(DIST_UPLOADS_DIR)) {
   try { fs.mkdirSync(DIST_UPLOADS_DIR, { recursive: true }); } catch {}
 }
 
-// Statically serve uploaded photos so they load lightning fast & permanently
-app.use('/uploads', express.static(UPLOADS_DIR, {
-  maxAge: '30d',
-  immutable: true
-}));
+// Statically serve uploaded photos from public, data/uploads, and dist/uploads
+app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '30d', immutable: true }));
+app.use('/uploads', express.static(DATA_UPLOADS_DIR, { maxAge: '30d', immutable: true }));
 if (fs.existsSync(DIST_UPLOADS_DIR)) {
-  app.use('/uploads', express.static(DIST_UPLOADS_DIR, {
-    maxAge: '30d',
-    immutable: true
-  }));
+  app.use('/uploads', express.static(DIST_UPLOADS_DIR, { maxAge: '30d', immutable: true }));
 }
+
+// Fallback direct file route for /uploads/:filename to guarantee 100% photo availability
+app.get('/uploads/:filename', (req, res, next) => {
+  const safeFilename = path.basename(req.params.filename);
+  const paths = [
+    path.join(UPLOADS_DIR, safeFilename),
+    path.join(DATA_UPLOADS_DIR, safeFilename),
+    path.join(DIST_UPLOADS_DIR, safeFilename)
+  ];
+  for (const p of paths) {
+    if (fs.existsSync(p)) {
+      return res.sendFile(p);
+    }
+  }
+  return next();
+});
 
 // Absolutely zero AI fake stories. Real stories uploaded by parents only.
 const DEFAULT_INITIAL_STORIES: any[] = [];
@@ -190,6 +203,9 @@ function saveBase64Image(base64Str: string, prefix = 'photo'): string {
     const safePrefix = (prefix || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
     const filename = `${safePrefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
     fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+    try {
+      fs.writeFileSync(path.join(DATA_UPLOADS_DIR, filename), buffer);
+    } catch {}
     if (fs.existsSync(DIST_UPLOADS_DIR)) {
       try {
         fs.writeFileSync(path.join(DIST_UPLOADS_DIR, filename), buffer);
@@ -547,16 +563,18 @@ app.post('/api/stories/bulk-sync', (req, res) => {
       const processed = processStoryImages(clientStory);
 
       if (existingIdx !== -1) {
-        const existingImages = currentStories[existingIdx].imageUrls || [];
-        const clientImages = processed.imageUrls || [];
+        const existingImages = (currentStories[existingIdx].imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+        const clientImages = (processed.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
         // If client has photos or updated content, merge it in
-        if (clientImages.length > existingImages.length || !currentStories[existingIdx].imageUrl) {
-          currentStories[existingIdx] = {
-            ...currentStories[existingIdx],
-            ...processed
-          };
-          mergedCount++;
-        }
+        const bestImages = clientImages.length >= existingImages.length ? clientImages : existingImages;
+        currentStories[existingIdx] = {
+          ...currentStories[existingIdx],
+          ...processed,
+          imageUrls: bestImages,
+          imageUrl: bestImages[0] || processed.imageUrl || currentStories[existingIdx].imageUrl || '',
+          updatedAt: new Date().toISOString()
+        };
+        mergedCount++;
       } else {
         processed.id = processed.id || 'story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
         currentStories.push(processed);
@@ -575,14 +593,16 @@ app.post('/api/stories/bulk-sync', (req, res) => {
   }
 });
 
-// 6. Direct photo upload endpoint
-app.post('/api/upload-photo', (req, res) => {
+// 6. Direct photo upload endpoints (supports both /api/upload and /api/upload-photo)
+app.post(['/api/upload', '/api/upload-photo'], (req, res) => {
   try {
-    const { imageBase64, name } = req.body;
-    if (!imageBase64) {
+    const body = req.body || {};
+    const base64Str = body.imageBase64 || body.image || body.imageData || body.image_data;
+    const name = body.name || body.filename || body.studentName || 'upload';
+    if (!base64Str) {
       return res.status(400).json({ error: 'imageBase64 is required' });
     }
-    const url = saveBase64Image(imageBase64, name || 'upload');
+    const url = saveBase64Image(base64Str, name);
     return res.json({ success: true, url });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });

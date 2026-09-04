@@ -19,7 +19,7 @@ import {
   MessageSquare
 } from 'lucide-react';
 import { StoryItem, WEEKS_LIST, RosterStudent, getCurrentWeekString, isWeekMatch } from '../types';
-import { saveDraftToIndexedDB, getDraftFromIndexedDB, clearDraftFromIndexedDB } from '../lib/idb';
+import { saveDraftToIndexedDB, getDraftFromIndexedDB, clearDraftFromIndexedDB, savePhotoToIndexedDB } from '../lib/idb';
 
 interface StoryFormViewProps {
   selectedWeek: string;
@@ -289,6 +289,14 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
         const file = fileArray[i];
         const dataUrl = await compressMobilePhoto(file);
         if (dataUrl) {
+          const photoIdx = imageUrls.length + newProcessedUrls.length;
+          const photoKey = `${activeStudentName || 'child'}_${week}_${photoIdx}`;
+          savePhotoToIndexedDB(photoKey, dataUrl, {
+            studentName: activeStudentName || '',
+            week,
+            photoIndex: photoIdx
+          }).catch(() => {});
+
           let finalUrl = dataUrl;
           try {
             const uploadRes = await fetch('/api/upload-photo', {

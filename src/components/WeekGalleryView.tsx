@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Presentation, Trash2, Search, Sparkles, Heart, Filter, MessageCircle, CheckCircle2, Camera, ImageOff, RefreshCw } from 'lucide-react';
 import { StoryItem, WEEKS_LIST, isWeekMatch } from '../types';
 import { WeekTabBar } from './WeekTabBar';
+import { findPhotoForStudent } from '../lib/idb';
 
 interface WeekGalleryViewProps {
   stories: StoryItem[];
@@ -19,17 +20,51 @@ const GalleryCardPhoto: React.FC<{
   const [currentUrl, setCurrentUrl] = useState<string | undefined>(photoUrl);
   const [retryCount, setRetryCount] = useState(0);
   const [hasError, setHasError] = useState(false);
+  const [isSelfHealing, setIsSelfHealing] = useState(false);
 
+  // Self-heal when photoUrl is an idb: marker or missing
   useEffect(() => {
-    setCurrentUrl(photoUrl);
-    setRetryCount(0);
-    setHasError(false);
-  }, [photoUrl]);
+    if (!photoUrl || photoUrl.startsWith('idb:')) {
+      findPhotoForStudent(studentName).then((cached) => {
+        if (cached) {
+          setCurrentUrl(cached);
+          setHasError(false);
+        } else {
+          setCurrentUrl(photoUrl?.startsWith('idb:') ? undefined : photoUrl);
+        }
+      });
+    } else {
+      setCurrentUrl(photoUrl);
+      setRetryCount(0);
+      setHasError(false);
+    }
+  }, [photoUrl, studentName]);
 
-  const handleImageError = () => {
-    if (retryCount < 2 && photoUrl) {
+  const handleImageError = async () => {
+    // Attempt self-healing from IndexedDB first
+    if (!isSelfHealing) {
+      setIsSelfHealing(true);
+      try {
+        const idbPhoto = await findPhotoForStudent(studentName);
+        if (idbPhoto && idbPhoto !== currentUrl) {
+          setCurrentUrl(idbPhoto);
+          setHasError(false);
+          // Background repair on server disk
+          fetch('/api/upload-photo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              imageBase64: idbPhoto,
+              name: `repaired_${studentName}_${Date.now()}`
+            })
+          }).catch(() => {});
+          return;
+        }
+      } catch {}
+    }
+
+    if (retryCount < 2 && photoUrl && !photoUrl.startsWith('data:')) {
       setRetryCount((prev) => prev + 1);
-      // Retry loading once or twice in case network was busy
       setTimeout(() => {
         const sep = photoUrl.includes('?') ? '&' : '?';
         setCurrentUrl(`${photoUrl}${sep}r=${Date.now()}`);

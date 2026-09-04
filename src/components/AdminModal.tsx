@@ -28,6 +28,7 @@ import {
   Send
 } from 'lucide-react';
 import { RosterStudent, StoryItem, WEEKS_LIST, isWeekMatch } from '../types';
+import { savePhotoToIndexedDB } from '../lib/idb';
 import {
   syncLocalStoriesToServer,
   saveStoryToServer,
@@ -484,6 +485,15 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         } catch (uploadErr) {
           // fallback to base64
         }
+
+        // Archive into IndexedDB dedicated photos store
+        const photoKey = `${proxyStudentName || '원아'}_${proxyWeek}_${newProxyUrls.length}`;
+        savePhotoToIndexedDB(photoKey, compressed, {
+          studentName: proxyStudentName || '원아',
+          week: proxyWeek,
+          photoIndex: newProxyUrls.length
+        }).catch(() => {});
+
         newProxyUrls.push(finalUrl);
       }
 
