@@ -72,12 +72,44 @@ export function ensureRosterOrder(list: RosterStudent[]): RosterStudent[] {
   return [...list].sort((a, b) => a.name.localeCompare(b.name, 'ko'));
 }
 
+function normalizeWeek(week?: string): string {
+  if (!week) return '전체';
+  return week.replace(/\s+/g, '');
+}
+
+export function cleanupLegacyLocalStorage(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (
+        key.startsWith('kindergarten_offline_stories') ||
+        key.startsWith('classgram_stories') ||
+        key === 'kindergarten_stories' ||
+        key === 'weekend_stories_backup'
+      ) {
+        keysToRemove.push(key);
+      } else {
+        const val = localStorage.getItem(key);
+        if (val && val.length > 1024 * 300 && val.includes('data:image/')) {
+          keysToRemove.push(key);
+        }
+      }
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+  } catch {}
+}
+
 /**
  * Fetch stories from persistent server storage.
  * Non-destructive bidirectional merge with client storage and IndexedDB.
  * Guarantees zero data loss even across device resets or network drops.
  */
 export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
+  cleanupLegacyLocalStorage();
+
   // Retrieve local caches (localStorage and IndexedDB)
   const localStories = getLocalStories().filter(s => !BANNED_MOCK_STORY_IDS.has(s.id));
   let idbStories: StoryItem[] = [];
@@ -87,24 +119,26 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
     console.warn('[Storage] IDB read skipped:', idbErr);
   }
 
-  // Aggregate all known client stories - Prioritize versions with valid image URLs
+  const makeStoryKey = (s: StoryItem) =>
+    `${s.studentName.trim().toLowerCase()}_${normalizeWeek(s.week)}`;
+
+  // Aggregate all known client stories - Single key mapping to prevent duplicates
   const clientMap = new Map<string, StoryItem>();
   const addOrUpdateClient = (s: StoryItem) => {
     if (!s || !s.studentName || BANNED_MOCK_STORY_IDS.has(s.id)) return;
-    const key = `${s.studentName}_${s.week || '전체'}`;
-    const existing = clientMap.get(key) || (s.id ? clientMap.get(s.id) : undefined);
-    const sImgs = (s.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
-    const exImgs = (existing?.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+    const key = makeStoryKey(s);
+    const existing = clientMap.get(key);
+    const sImgs = (s.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
+    const exImgs = (existing?.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
     if (!existing || sImgs.length >= exImgs.length) {
       clientMap.set(key, s);
-      if (s.id) clientMap.set(s.id, s);
     }
   };
 
   for (const s of localStories) addOrUpdateClient(s);
   for (const s of idbStories) addOrUpdateClient(s);
 
-  const allClientStories = Array.from(new Set(clientMap.values()));
+  const allClientStories = Array.from(clientMap.values());
 
   try {
     const res = await fetch('/api/stories');
@@ -113,50 +147,60 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
       if (data && data.success && Array.isArray(data.stories)) {
         let serverStories: StoryItem[] = data.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
 
-        // Intelligent map merge: index all server stories by key and id
+        // Intelligent map merge: index all server stories by single canonical student+week key
         const mergedMap = new Map<string, StoryItem>();
         for (const s of serverStories) {
           if (s && s.studentName) {
-            const key = `${s.studentName}_${s.week || '전체'}`;
-            mergedMap.set(key, s);
-            if (s.id) mergedMap.set(s.id, s);
+            mergedMap.set(makeStoryKey(s), s);
           }
         }
 
-        // Merge all client stories into mergedMap: never drop photos!
+        // Merge client stories into mergedMap without dropping permanent server photos
         for (const cStory of allClientStories) {
           if (!cStory || !cStory.studentName || BANNED_MOCK_STORY_IDS.has(cStory.id)) continue;
-          const key = `${cStory.studentName}_${cStory.week || '전체'}`;
-          const existing = mergedMap.get(key) || (cStory.id ? mergedMap.get(cStory.id) : undefined);
+          const key = makeStoryKey(cStory);
+          const existing = mergedMap.get(key);
 
           if (!existing) {
             mergedMap.set(key, cStory);
-            if (cStory.id) mergedMap.set(cStory.id, cStory);
           } else {
-            const existingUrls = (existing.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
-            const clientUrls = (cStory.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
-            const bestUrls = clientUrls.length >= existingUrls.length ? clientUrls : existingUrls;
+            const existingUrls = (existing.imageUrls || []).filter(
+              (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+            );
+            const clientUrls = (cStory.imageUrls || []).filter(
+              (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+            );
+            const bestUrls = existingUrls.length >= clientUrls.length
+              ? existingUrls
+              : (clientUrls.length > 0 ? clientUrls : existingUrls);
+
             const mergedItem: StoryItem = {
               ...existing,
               ...cStory,
+              id: existing.id || cStory.id,
               title: cStory.title || existing.title,
               content: cStory.content || existing.content,
               imageUrls: bestUrls,
-              imageUrl: bestUrls[0] || cStory.imageUrl || existing.imageUrl || ''
+              imageUrl: bestUrls[0] || existing.imageUrl || cStory.imageUrl || ''
             };
             mergedMap.set(key, mergedItem);
-            if (mergedItem.id) mergedMap.set(mergedItem.id, mergedItem);
           }
         }
 
-        const mergedList = Array.from(new Set(mergedMap.values()));
+        const mergedList = Array.from(mergedMap.values());
 
-        // Identify any client stories missing from or needing photo repair on the server
+        // Identify any client stories missing from the server or needing upload
         const needServerSync = mergedList.filter((m) => {
-          const onServer = serverStories.find(s => s.id === m.id || (s.studentName === m.studentName && s.week === m.week));
+          const onServer = serverStories.find(
+            s => s.id === m.id || makeStoryKey(s) === makeStoryKey(m)
+          );
           if (!onServer) return true;
-          const onServerPhotos = (onServer.imageUrls || []).filter(u => typeof u === 'string' && u.trim().length > 0);
-          const mPhotos = (m.imageUrls || []).filter(u => typeof u === 'string' && u.trim().length > 0);
+          const onServerPhotos = (onServer.imageUrls || []).filter(
+            u => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+          );
+          const mPhotos = (m.imageUrls || []).filter(
+            u => typeof u === 'string' && u.trim().length > 0 && (u.startsWith('data:') || !u.startsWith('idb:'))
+          );
           return mPhotos.length > onServerPhotos.length;
         });
 
@@ -229,7 +273,13 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
 export async function saveStoryToServer(story: StoryItem): Promise<{ success: boolean; story?: StoryItem; stories?: StoryItem[] }> {
   // Always update local cache and IndexedDB first for instant UI response and zero data loss
   const localList = getLocalStories();
-  const existingIdx = localList.findIndex((s) => s.id === story.id || (s.studentName === story.studentName && s.week === story.week));
+  const makeStoryKey = (s: { studentName: string; week?: string }) =>
+    `${s.studentName.trim().toLowerCase()}_${normalizeWeek(s.week)}`;
+
+  const existingIdx = localList.findIndex(
+    (s) => s.id === story.id || makeStoryKey(s) === makeStoryKey(story)
+  );
+
   let updatedLocal: StoryItem[];
   if (existingIdx !== -1) {
     updatedLocal = [...localList];
@@ -838,16 +888,16 @@ export function saveLocalStories(stories: StoryItem[]): void {
 
   try {
     // 2. Prepare safe lightweight payload for localStorage (never store giant base64 in localStorage)
-    // Server URLs (/uploads/...) are already short and kept as-is.
+    // Server URLs (/uploads/...) are short (~30 bytes) and kept as-is.
     const lightweight = stories.map((s) => {
       const urls = (s.imageUrls || []).map((u, idx) => {
-        if (typeof u === 'string' && u.startsWith('data:image/') && u.length > 200) {
-          return `idb:photo_${s.studentName}_${s.week}_${idx}`;
+        if (typeof u === 'string' && (u.startsWith('data:') || u.length > 300)) {
+          return `idb:photo_${s.studentName}_${normalizeWeek(s.week)}_${idx}`;
         }
         return u;
       });
-      const cover = typeof s.imageUrl === 'string' && s.imageUrl.startsWith('data:image/') && s.imageUrl.length > 200
-        ? (urls[0] || `idb:photo_${s.studentName}_${s.week}_0`)
+      const cover = typeof s.imageUrl === 'string' && (s.imageUrl.startsWith('data:') || s.imageUrl.length > 300)
+        ? (urls[0] || `idb:photo_${s.studentName}_${normalizeWeek(s.week)}_0`)
         : s.imageUrl;
 
       return {
@@ -857,7 +907,17 @@ export function saveLocalStories(stories: StoryItem[]): void {
       };
     });
 
-    localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(lightweight));
+    try {
+      localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(lightweight));
+    } catch (quotaErr) {
+      // If quota exceeded, clean legacy keys and try one more time
+      cleanupLegacyLocalStorage();
+      try {
+        localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(lightweight));
+      } catch (retryErr) {
+        console.warn('[Storage] localStorage quota reached: full state preserved safely in IndexedDB and server disk.', retryErr);
+      }
+    }
   } catch (e) {
     console.warn('[Storage] localStorage save note (quota managed): full fidelity safely preserved in IndexedDB.', e);
   }

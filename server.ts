@@ -88,6 +88,20 @@ const BANNED_MOCK_STORY_IDS = new Set([
   'story-eunsol'
 ]);
 
+function normalizeWeekName(week?: string): string {
+  if (!week) return '전체';
+  return week.replace(/\s+/g, '');
+}
+
+function isSameStudentAndWeek(name1?: string, week1?: string, name2?: string, week2?: string): boolean {
+  if (!name1 || !name2) return false;
+  if (name1.trim().toLowerCase() !== name2.trim().toLowerCase()) return false;
+  const w1 = normalizeWeekName(week1);
+  const w2 = normalizeWeekName(week2);
+  if (w1 === '전체' || w2 === '전체') return true;
+  return w1 === w2;
+}
+
 function readStories(): any[] {
   try {
     if (fs.existsSync(STORIES_FILE)) {
@@ -126,15 +140,22 @@ function readStories(): any[] {
       console.error('Backup read failed:', bErr);
     }
   }
-  writeStories(DEFAULT_INITIAL_STORIES);
   return DEFAULT_INITIAL_STORIES;
 }
 
 function writeStories(stories: any[]): boolean {
   try {
     const jsonStr = JSON.stringify(stories, null, 2);
-    fs.writeFileSync(STORIES_FILE, jsonStr, 'utf-8');
-    fs.writeFileSync(STORIES_BACKUP_FILE, jsonStr, 'utf-8');
+    const tmpFile = `${STORIES_FILE}.tmp.${Date.now()}`;
+    fs.writeFileSync(tmpFile, jsonStr, 'utf-8');
+    fs.renameSync(tmpFile, STORIES_FILE);
+
+    try {
+      const tmpBackup = `${STORIES_BACKUP_FILE}.tmp.${Date.now()}`;
+      fs.writeFileSync(tmpBackup, jsonStr, 'utf-8');
+      fs.renameSync(tmpBackup, STORIES_BACKUP_FILE);
+    } catch {}
+
     return true;
   } catch (err) {
     console.error('Failed to write stories to disk:', err);
@@ -223,9 +244,9 @@ function processStoryImages(story: any): any {
   const cloned = { ...story };
   let urls = Array.isArray(cloned.imageUrls) ? [...cloned.imageUrls] : (cloned.imageUrl ? [cloned.imageUrl] : []);
   
-  // Clean up and convert any data URLs to permanent disk files
+  // Clean up and convert any data URLs to permanent disk files. Discard ephemeral idb: references.
   urls = urls
-    .filter((u: any) => typeof u === 'string' && u.trim().length > 0)
+    .filter((u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'))
     .map((url: string, idx: number) => {
       if (url.startsWith('data:')) {
         return saveBase64Image(url, `story_${cloned.studentName || 'child'}_${idx + 1}`);
@@ -234,7 +255,7 @@ function processStoryImages(story: any): any {
     });
 
   cloned.imageUrls = urls;
-  cloned.imageUrl = urls[0] || (cloned.imageUrl?.startsWith('data:') ? saveBase64Image(cloned.imageUrl, `story_${cloned.studentName || 'child'}_cover`) : cloned.imageUrl) || '';
+  cloned.imageUrl = urls[0] || (cloned.imageUrl && !cloned.imageUrl.startsWith('idb:') && cloned.imageUrl.startsWith('data:') ? saveBase64Image(cloned.imageUrl, `story_${cloned.studentName || 'child'}_cover`) : (!cloned.imageUrl?.startsWith('idb:') ? cloned.imageUrl : '')) || '';
   return cloned;
 }
 
@@ -464,37 +485,31 @@ app.post('/api/stories', (req, res) => {
     const processedStory = processStoryImages(storyData);
     let updatedStories: any[];
 
-    if (processedStory.id) {
-      const idx = currentStories.findIndex((s: any) => s.id === processedStory.id);
-      if (idx !== -1) {
-        currentStories[idx] = {
-          ...currentStories[idx],
-          ...processedStory,
-          updatedAt: new Date().toISOString()
-        };
-        updatedStories = currentStories;
-      } else {
-        processedStory.createdAt = processedStory.createdAt || new Date().toISOString();
-        updatedStories = [processedStory, ...currentStories];
-      }
+    // Match existing story by ID or (studentName + normalized week)
+    const existingIdx = currentStories.findIndex((s: any) => {
+      if (processedStory.id && s.id === processedStory.id) return true;
+      return isSameStudentAndWeek(s.studentName, s.week, processedStory.studentName, processedStory.week);
+    });
+
+    if (existingIdx !== -1) {
+      const existing = currentStories[existingIdx];
+      const existingImages = (existing.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
+      const newImages = (processedStory.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
+      const finalImages = newImages.length > 0 ? newImages : existingImages;
+
+      currentStories[existingIdx] = {
+        ...existing,
+        ...processedStory,
+        id: existing.id || processedStory.id,
+        imageUrls: finalImages,
+        imageUrl: finalImages[0] || existing.imageUrl || processedStory.imageUrl || '',
+        updatedAt: new Date().toISOString()
+      };
+      updatedStories = currentStories;
     } else {
-      // Check if story already exists for this student and week
-      const existingIdx = currentStories.findIndex(
-        (s: any) => s.studentName === processedStory.studentName && s.week === processedStory.week
-      );
-      if (existingIdx !== -1) {
-        currentStories[existingIdx] = {
-          ...currentStories[existingIdx],
-          ...processedStory,
-          id: currentStories[existingIdx].id,
-          updatedAt: new Date().toISOString()
-        };
-        updatedStories = currentStories;
-      } else {
-        processedStory.id = 'story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
-        processedStory.createdAt = new Date().toISOString();
-        updatedStories = [processedStory, ...currentStories];
-      }
+      processedStory.id = processedStory.id || ('story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6));
+      processedStory.createdAt = processedStory.createdAt || new Date().toISOString();
+      updatedStories = [processedStory, ...currentStories];
     }
 
     writeStories(updatedStories);
@@ -554,24 +569,30 @@ app.post('/api/stories/bulk-sync', (req, res) => {
     for (const clientStory of clientStories) {
       if (!clientStory || !clientStory.studentName || BANNED_MOCK_STORY_IDS.has(clientStory.id)) continue;
 
-      const existingIdx = currentStories.findIndex(
-        (s: any) =>
-          (clientStory.id && s.id === clientStory.id) ||
-          (s.studentName === clientStory.studentName && s.week === clientStory.week)
-      );
+      const existingIdx = currentStories.findIndex((s: any) => {
+        if (clientStory.id && s.id === clientStory.id) return true;
+        return isSameStudentAndWeek(s.studentName, s.week, clientStory.studentName, clientStory.week);
+      });
 
       const processed = processStoryImages(clientStory);
 
       if (existingIdx !== -1) {
-        const existingImages = (currentStories[existingIdx].imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
-        const clientImages = (processed.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0);
-        // If client has photos or updated content, merge it in
-        const bestImages = clientImages.length >= existingImages.length ? clientImages : existingImages;
+        const existingImages = (currentStories[existingIdx].imageUrls || []).filter(
+          (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+        );
+        const clientImages = (processed.imageUrls || []).filter(
+          (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+        );
+        // Only adopt client images if client has valid photos, otherwise strictly preserve server photos
+        const bestImages = clientImages.length >= existingImages.length && clientImages.length > 0
+          ? clientImages
+          : existingImages;
         currentStories[existingIdx] = {
           ...currentStories[existingIdx],
           ...processed,
+          id: currentStories[existingIdx].id || processed.id,
           imageUrls: bestImages,
-          imageUrl: bestImages[0] || processed.imageUrl || currentStories[existingIdx].imageUrl || '',
+          imageUrl: bestImages[0] || currentStories[existingIdx].imageUrl || processed.imageUrl || '',
           updatedAt: new Date().toISOString()
         };
         mergedCount++;

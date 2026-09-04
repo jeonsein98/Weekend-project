@@ -73,37 +73,41 @@ export default function App() {
           const data = await res.json();
           if (data && data.success && Array.isArray(data.stories)) {
             setStories((prev) => {
+              const makeKey = (s: StoryItem) =>
+                `${s.studentName.trim().toLowerCase()}_${(s.week || '전체').replace(/\s+/g, '')}`;
+
               const map = new Map<string, StoryItem>();
               for (const s of prev) {
                 if (s && s.studentName) {
-                  const k = `${s.studentName}_${s.week || '전체'}`;
-                  map.set(k, s);
-                  if (s.id) map.set(s.id, s);
+                  map.set(makeKey(s), s);
                 }
               }
               for (const s of data.stories as StoryItem[]) {
                 if (s && s.studentName) {
-                  const k = `${s.studentName}_${s.week || '전체'}`;
-                  const existing = map.get(k) || (s.id ? map.get(s.id) : undefined);
+                  const k = makeKey(s);
+                  const existing = map.get(k);
                   if (!existing) {
                     map.set(k, s);
-                    if (s.id) map.set(s.id, s);
                   } else {
-                    const exPhotos = (existing.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
-                    const newPhotos = (s.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0);
+                    const exPhotos = (existing.imageUrls || []).filter(
+                      (u: string) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+                    );
+                    const newPhotos = (s.imageUrls || []).filter(
+                      (u: string) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+                    );
                     const bestPhotos = newPhotos.length >= exPhotos.length ? newPhotos : exPhotos;
                     const merged: StoryItem = {
                       ...existing,
                       ...s,
-                      imageUrls: bestPhotos,
+                      id: s.id || existing.id,
+                      imageUrls: bestPhotos.length > 0 ? bestPhotos : (existing.imageUrls || []),
                       imageUrl: bestPhotos[0] || s.imageUrl || existing.imageUrl || ''
                     };
                     map.set(k, merged);
-                    if (merged.id) map.set(merged.id, merged);
                   }
                 }
               }
-              const finalStories = Array.from(new Set(map.values()));
+              const finalStories = Array.from(map.values());
               saveLocalStories(finalStories);
               return finalStories;
             });
@@ -174,7 +178,9 @@ export default function App() {
     } else {
       // Check if there is already a story for this student and this week
       const existing = stories.find(
-        (s) => s.studentName === storyData.studentName && s.week === storyData.week
+        (s) =>
+          s.studentName.trim().toLowerCase() === storyData.studentName.trim().toLowerCase() &&
+          isWeekMatch(s.week, storyData.week)
       );
 
       if (existing) {
@@ -182,7 +188,7 @@ export default function App() {
           ...existing,
           ...storyData,
           id: existing.id,
-          createdAt: new Date().toISOString()
+          createdAt: existing.createdAt || new Date().toISOString()
         };
       } else {
         savedStory = {
