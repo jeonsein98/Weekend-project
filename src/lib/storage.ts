@@ -19,8 +19,18 @@ export const BANNED_MOCK_STORY_IDS = new Set([
   'demo-2',
   'demo-3',
   'demo-4',
-  'story-luha',
-  'story-dohee'
+  'story-ichan',
+  'story-sian',
+  'story-chaeyeon',
+  'story-seeun',
+  'story-rihan',
+  'story-jian',
+  'story-inyul',
+  'story-jiwoo',
+  'story-gangmo',
+  'story-sihun',
+  'story-siyun',
+  'story-luha'
 ]);
 
 export const LEGACY_MOCK_STUDENT_NAMES = new Set([
@@ -442,6 +452,92 @@ export function scanAndRecoverBrowserRoster(): { foundStudents: RosterStudent[];
   return {
     foundStudents: Array.from(foundMap.values()),
     sourceKeys
+  };
+}
+
+/**
+ * Deep scan browser localStorage and IndexedDB for any previously submitted genuine stories or photo drafts
+ */
+export async function scanAndRecoverBrowserStories(): Promise<{ recoveredStories: StoryItem[]; sourceDescriptions: string[] }> {
+  const recoveredMap = new Map<string, StoryItem>();
+  const sourceDescriptions: string[] = [];
+
+  // 1. Scan localStorage
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+
+        if (
+          raw.includes('studentName') &&
+          (raw.includes('imageUrls') || raw.includes('imageUrl') || raw.includes('title') || raw.includes('content'))
+        ) {
+          const parsed = JSON.parse(raw);
+          const items = Array.isArray(parsed) ? parsed : [parsed];
+
+          for (const item of items) {
+            if (
+              item &&
+              item.studentName &&
+              typeof item.studentName === 'string' &&
+              !BANNED_MOCK_STORY_IDS.has(item.id) &&
+              item.id !== 'demo-eunsol'
+            ) {
+              const storyId = item.id || `recovered-story-${item.studentName}-${Date.now()}`;
+              recoveredMap.set(storyId, {
+                ...item,
+                id: storyId
+              });
+              sourceDescriptions.push(`localStorage [${key}] - ${item.studentName} (${item.title || '제목 없음'})`);
+            }
+          }
+        }
+      } catch {}
+    }
+  } catch (lsErr) {
+    console.warn('[Storage] scan stories localStorage err:', lsErr);
+  }
+
+  // 2. Scan IndexedDB
+  try {
+    const idbStories = await getAllStoriesFromIndexedDB();
+    for (const item of idbStories) {
+      if (
+        item &&
+        item.studentName &&
+        !BANNED_MOCK_STORY_IDS.has(item.id) &&
+        item.id !== 'demo-eunsol'
+      ) {
+        recoveredMap.set(item.id, item);
+        sourceDescriptions.push(`IndexedDB stories - ${item.studentName} (${item.title || '제목 없음'})`);
+      }
+    }
+  } catch (idbErr) {
+    console.warn('[Storage] scan stories IDB err:', idbErr);
+  }
+
+  const recoveredList = Array.from(recoveredMap.values());
+
+  // If genuine stories found, auto-sync them to server
+  if (recoveredList.length > 0) {
+    try {
+      await fetch('/api/stories/bulk-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stories: recoveredList })
+      });
+    } catch (syncErr) {
+      console.warn('[Storage] Auto-sync recovered stories err:', syncErr);
+    }
+  }
+
+  return {
+    recoveredStories: recoveredList,
+    sourceDescriptions
   };
 }
 

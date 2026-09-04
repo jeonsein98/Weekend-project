@@ -78,8 +78,18 @@ const BANNED_MOCK_STORY_IDS = new Set([
   'demo-2',
   'demo-3',
   'demo-4',
-  'story-luha',
-  'story-dohee'
+  'story-ichan',
+  'story-sian',
+  'story-chaeyeon',
+  'story-seeun',
+  'story-rihan',
+  'story-jian',
+  'story-inyul',
+  'story-jiwoo',
+  'story-gangmo',
+  'story-sihun',
+  'story-siyun',
+  'story-luha'
 ]);
 
 function readStories(): any[] {

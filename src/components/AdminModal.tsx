@@ -33,6 +33,8 @@ import {
   saveStoryToServer,
   restoreEunsol18Roster,
   scanAndRecoverBrowserRoster,
+  scanAndRecoverBrowserStories,
+  fetchStoriesFromServer,
   getRosterSnapshots,
   EUNSOL_18_ROSTER
 } from '../lib/storage';
@@ -174,6 +176,27 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     const updated = [...roster, ...newItems];
     onSaveRoster(updated);
     onShowToast(`브라우저 캐시에서 ${newItems.length}명의 원아를 찾아 성공적으로 복구했습니다!`, 'success');
+  };
+
+  const [isScanningStories, setIsScanningStories] = useState(false);
+
+  // Scan browser localStorage & IndexedDB for genuine parent-uploaded stories & photos
+  const handleScanStoriesCache = async () => {
+    setIsScanningStories(true);
+    try {
+      const { recoveredStories, sourceDescriptions } = await scanAndRecoverBrowserStories();
+      if (recoveredStories.length === 0) {
+        onShowToast('현재 브라우저에 저장된 이전 주말 이야기 원본 캐시가 없습니다. (학부모님 기기에서 접속 시 해당 기기의 캐시도 스캔됩니다)', 'info');
+      } else {
+        onShowToast(`브라우저 캐시(${sourceDescriptions.length}건)에서 ${recoveredStories.length}개의 실제 주말 이야기/사진을 복원하여 서버에 저장했습니다!`, 'success');
+        const refreshed = await fetchStoriesFromServer();
+        if (onStoriesUpdated) onStoriesUpdated(refreshed);
+      }
+    } catch (e) {
+      onShowToast('스토리 캐시 검사 중 오류가 발생했습니다.', 'error');
+    } finally {
+      setIsScanningStories(false);
+    }
   };
 
   // Quick Apply pasted 18 students
@@ -833,6 +856,15 @@ ${name} 학부모님, 사진을 첨부하신 후 화면 맨 아래의 [Instagram
                 선생님이 직접 이야기 카드의 <strong>[삭제]</strong> 버튼을 누르기 전까지는 기기를 닫거나 새로고침해도 절대 사라지지 않고 보존됩니다.
               </p>
               <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleScanStoriesCache}
+                  disabled={isScanningStories}
+                  className="px-3.5 py-2 rounded-xl bg-amber-50 border border-amber-300 hover:bg-amber-100 text-amber-900 text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
+                >
+                  <Search className={`w-3.5 h-3.5 text-amber-700 ${isScanningStories ? 'animate-spin' : ''}`} />
+                  🔍 브라우저 캐시 원본 사진·글 전수 스캔 및 복구
+                </button>
                 <button
                   type="button"
                   onClick={handleSyncLocalToServer}
