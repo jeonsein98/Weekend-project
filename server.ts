@@ -21,36 +21,28 @@ const STORIES_BACKUP_FILE = path.join(DATA_DIR, 'stories.backup.json');
 const ROSTER_FILE = path.join(DATA_DIR, 'roster.json');
 const ROSTER_BACKUP_FILE = path.join(DATA_DIR, 'roster.backup.json');
 const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
+const DIST_UPLOADS_DIR = path.join(process.cwd(), 'dist', 'uploads');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(DIST_UPLOADS_DIR)) {
+  try { fs.mkdirSync(DIST_UPLOADS_DIR, { recursive: true }); } catch {}
+}
 
 // Statically serve uploaded photos so they load lightning fast & permanently
-app.use('/uploads', express.static(UPLOADS_DIR));
+app.use('/uploads', express.static(UPLOADS_DIR, {
+  maxAge: '30d',
+  immutable: true
+}));
+if (fs.existsSync(DIST_UPLOADS_DIR)) {
+  app.use('/uploads', express.static(DIST_UPLOADS_DIR, {
+    maxAge: '30d',
+    immutable: true
+  }));
+}
 
-const DEFAULT_INITIAL_STORIES = [
-  {
-    id: 'demo-eunsol',
-    week: '9월 1주차(방학지낸이야기)',
-    studentName: '김은솔',
-    parentPin: '1234',
-    title: '신나는 여름방학 동해 바다 체험과 우리가족 모래성 쌓기',
-    content: '안녕하세요! 은솔이네 가족의 즐거웠던 여름방학 주말 이야기입니다.\n\n방학 동안 은솔이와 함께 동해 바다로 여름 휴가를 다녀왔어요. 바닷가에서 맑은 파도 소리도 듣고, 아빠 엄마와 힘을 합쳐 커다란 인어공주 모래성도 만들었답니다. 조개껍데기를 주워서 모래성을 예쁘게 꾸미는 동안 은솔이 얼굴에 웃음꽃이 피어났어요. 저녁에는 신선한 해산물도 맛있게 먹고 밤하늘의 반짝이는 별도 관찰하며 소중한 추억을 가득 쌓았습니다.\n\n우리 유치원 친구들도 방학 동안 모두 건강하고 즐겁게 보냈기를 바라요! 💕',
-    imageUrls: [
-      '/uploads/eunsol_beach_laugh.jpg',
-      '/uploads/eunsol_sandcastle.jpg',
-      '/uploads/eunsol_family_sunset.jpg'
-    ],
-    imageCaptions: [
-      '파도가 넘실거리는 에메랄드빛 동해 바닷가에서 찰칵! 🌊',
-      '조개껍데기로 예쁘게 꾸민 커다란 모래성 앞에서 포즈 🏰',
-      '노을 지는 해변을 걸으며 가족과 함께 나누는 소중한 행복 🌅'
-    ],
-    aiComment: '자연 속에서 가족과의 따뜻한 사랑과 협동심을 배운 최고의 여름방학 이야기입니다! 조개껍데기로 꾸민 모래성이 정말 동화 속 풍경 같아요. ✨🐚🌊',
-    createdAt: new Date().toISOString(),
-    reactions: { '❤️': 24, '👏': 18, '⭐': 15 }
-  }
-];
+// Absolutely zero AI fake stories. Real stories uploaded by parents only.
+const DEFAULT_INITIAL_STORIES: any[] = [];
 
 export const DEFAULT_INITIAL_ROSTER = [
   { id: 'roster-es-1', name: '강루하', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' },
@@ -73,23 +65,14 @@ export const DEFAULT_INITIAL_ROSTER = [
   { id: 'roster-es-18', name: '하시훈', className: '은솔1반', parentPin: '1234', note: '은솔1반 원아' }
 ];
 
+// Ban only synthetic demo/AI mock IDs so real student stories are NEVER filtered out
 const BANNED_MOCK_STORY_IDS = new Set([
   'demo-1',
   'demo-2',
   'demo-3',
   'demo-4',
-  'story-ichan',
-  'story-sian',
-  'story-chaeyeon',
-  'story-seeun',
-  'story-rihan',
-  'story-jian',
-  'story-inyul',
-  'story-jiwoo',
-  'story-gangmo',
-  'story-sihun',
-  'story-siyun',
-  'story-luha'
+  'demo-eunsol',
+  'story-eunsol'
 ]);
 
 function readStories(): any[] {
@@ -207,6 +190,11 @@ function saveBase64Image(base64Str: string, prefix = 'photo'): string {
     const safePrefix = (prefix || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
     const filename = `${safePrefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
     fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+    if (fs.existsSync(DIST_UPLOADS_DIR)) {
+      try {
+        fs.writeFileSync(path.join(DIST_UPLOADS_DIR, filename), buffer);
+      } catch {}
+    }
     return `/uploads/${filename}`;
   } catch (err) {
     console.error('Error saving image to disk:', err);

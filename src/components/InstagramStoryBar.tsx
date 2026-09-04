@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { RosterStudent, StoryItem, isWeekMatch } from '../types';
 import { Users, Sparkles, UserCheck } from 'lucide-react';
-import eunsolBeachLaugh from '../assets/images/eunsol_beach_laugh_1786166395268.jpg';
 
 interface InstagramStoryBarProps {
   stories: StoryItem[];
@@ -27,13 +26,7 @@ const StudentStoryAvatar: React.FC<{ photoUrl?: string; studentName: string }> =
       <img
         src={currentUrl}
         alt=""
-        onError={() => {
-          if (currentUrl !== eunsolBeachLaugh) {
-            setCurrentUrl(eunsolBeachLaugh);
-          } else {
-            setHasError(true);
-          }
-        }}
+        onError={() => setHasError(true)}
         className="w-full h-full object-cover rounded-full"
       />
     );

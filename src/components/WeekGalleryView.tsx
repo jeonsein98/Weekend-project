@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
-import { Presentation, Trash2, Search, Sparkles, Heart, Filter, MessageCircle, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Presentation, Trash2, Search, Sparkles, Heart, Filter, MessageCircle, CheckCircle2, Camera, ImageOff, RefreshCw } from 'lucide-react';
 import { StoryItem, WEEKS_LIST, isWeekMatch } from '../types';
 import { WeekTabBar } from './WeekTabBar';
-import eunsolBeachLaugh from '../assets/images/eunsol_beach_laugh_1786166395268.jpg';
 
 interface WeekGalleryViewProps {
   stories: StoryItem[];
@@ -11,6 +10,86 @@ interface WeekGalleryViewProps {
   onSelectForPresentation: (week: string) => void;
   onDeleteStory: (id: string) => void;
 }
+
+const GalleryCardPhoto: React.FC<{
+  photoUrl?: string;
+  studentName: string;
+  title?: string;
+}> = ({ photoUrl, studentName, title }) => {
+  const [currentUrl, setCurrentUrl] = useState<string | undefined>(photoUrl);
+  const [retryCount, setRetryCount] = useState(0);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setCurrentUrl(photoUrl);
+    setRetryCount(0);
+    setHasError(false);
+  }, [photoUrl]);
+
+  const handleImageError = () => {
+    if (retryCount < 2 && photoUrl) {
+      setRetryCount((prev) => prev + 1);
+      // Retry loading once or twice in case network was busy
+      setTimeout(() => {
+        const sep = photoUrl.includes('?') ? '&' : '?';
+        setCurrentUrl(`${photoUrl}${sep}r=${Date.now()}`);
+      }, 600);
+    } else {
+      setHasError(true);
+    }
+  };
+
+  if (!photoUrl) {
+    return (
+      <div className="w-full h-full bg-linear-to-br from-amber-50 to-orange-50 flex flex-col items-center justify-center p-4 text-center select-none">
+        <div className="w-12 h-12 rounded-full bg-white shadow-xs flex items-center justify-center text-amber-600 mb-2 font-bold text-sm">
+          {studentName.slice(0, 2)}
+        </div>
+        <span className="text-xs font-bold text-[#2D2A26]">{studentName} 어린이</span>
+        <span className="text-[10px] text-[#8E8E8E] mt-0.5">사진 등록 대기 중</span>
+      </div>
+    );
+  }
+
+  if (hasError) {
+    return (
+      <div className="w-full h-full bg-[#1F1E1D] flex flex-col items-center justify-center p-4 text-center select-none text-white/90">
+        <Camera className="w-8 h-8 text-amber-400 mb-2 opacity-80" />
+        <span className="text-xs font-bold text-amber-200">{studentName} 어린이 사진</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setHasError(false);
+            setRetryCount(0);
+            const sep = photoUrl.includes('?') ? '&' : '?';
+            setCurrentUrl(`${photoUrl}${sep}reload=${Date.now()}`);
+          }}
+          className="mt-2 px-2.5 py-1 rounded-full bg-white/15 hover:bg-white/25 text-[10px] font-bold flex items-center gap-1 text-white transition-colors"
+        >
+          <RefreshCw className="w-3 h-3" />
+          다시 불러오기
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <img
+        src={currentUrl}
+        alt=""
+        aria-hidden="true"
+        className="absolute inset-0 w-full h-full object-cover blur-xl opacity-35 scale-110 pointer-events-none"
+      />
+      <img
+        src={currentUrl}
+        alt={title || `${studentName}의 주말 이야기`}
+        onError={handleImageError}
+        className="relative z-10 max-h-full max-w-full object-contain group-hover/img:scale-105 transition-transform duration-500 drop-shadow-md"
+      />
+    </>
+  );
+};
 
 export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
   stories,
@@ -135,7 +214,7 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
               ? story.imageUrls
               : (story.imageUrl ? [story.imageUrl] : []);
             const photos = rawPhotos.filter((u: any) => typeof u === 'string' && u.trim().length > 0);
-            const coverPhoto = photos[0] || eunsolBeachLaugh;
+            const coverPhoto = photos[0];
             const totalReactions = (Object.values(story.reactions || {}) as (number | string)[]).reduce<number>((acc, curr) => acc + (Number(curr) || 0), 0);
 
             return (
@@ -164,33 +243,7 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
 
                 {/* Photo Grid Box */}
                 <div className="relative aspect-square bg-black overflow-hidden group/img cursor-pointer flex items-center justify-center" onClick={() => onSelectForPresentation(story.week)}>
-                  {coverPhoto ? (
-                    <>
-                      <img
-                        src={coverPhoto}
-                        alt=""
-                        aria-hidden="true"
-                        onError={(e) => {
-                          e.currentTarget.onerror = null;
-                          e.currentTarget.src = eunsolBeachLaugh;
-                        }}
-                        className="absolute inset-0 w-full h-full object-cover blur-xl opacity-35 scale-110 pointer-events-none"
-                      />
-                      <img
-                        src={coverPhoto}
-                        alt={story.title}
-                        onError={(e) => {
-                          e.currentTarget.onerror = null;
-                          e.currentTarget.src = eunsolBeachLaugh;
-                        }}
-                        className="relative z-10 max-h-full max-w-full object-contain group-hover/img:scale-105 transition-transform duration-500 drop-shadow-md"
-                      />
-                    </>
-                  ) : (
-                    <div className="w-full h-full bg-[#F5F5F5] flex items-center justify-center text-xs text-[#8E8E8E] font-bold">
-                      사진 없음
-                    </div>
-                  )}
+                  <GalleryCardPhoto photoUrl={coverPhoto} studentName={story.studentName} title={story.title} />
 
                   {/* Multi-photo badge */}
                   {photos.length > 1 && (

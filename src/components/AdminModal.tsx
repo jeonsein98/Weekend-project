@@ -844,17 +844,13 @@ ${name} 학부모님, 사진을 첨부하신 후 화면 맨 아래의 [Instagram
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-[#7C8E7E]" />
-                  <h4 className="font-serif font-bold text-[#2D2A26] text-sm">학부모 업로드 사진 및 데이터 영구 보존 센터</h4>
+                  <h4 className="font-serif font-bold text-[#2D2A26] text-sm">학부모 업로드 사진 및 데이터 복구 센터</h4>
                 </div>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#E8F0E9] text-[#2D3A30] text-[11px] font-bold w-fit">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  서버 영구 보존 활성화됨
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  저장소 연결됨
                 </span>
               </div>
-              <p className="text-xs text-[#8B8378] leading-relaxed">
-                학부모님들이 스마트폰에서 등록하신 사진과 주말 이야기는 서버 디스크에 안전하게 영구 저장됩니다.
-                선생님이 직접 이야기 카드의 <strong>[삭제]</strong> 버튼을 누르기 전까지는 기기를 닫거나 새로고침해도 절대 사라지지 않고 보존됩니다.
-              </p>
               <div className="flex flex-wrap gap-2 pt-1">
                 <button
                   type="button"

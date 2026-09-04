@@ -19,18 +19,8 @@ export const BANNED_MOCK_STORY_IDS = new Set([
   'demo-2',
   'demo-3',
   'demo-4',
-  'story-ichan',
-  'story-sian',
-  'story-chaeyeon',
-  'story-seeun',
-  'story-rihan',
-  'story-jian',
-  'story-inyul',
-  'story-jiwoo',
-  'story-gangmo',
-  'story-sihun',
-  'story-siyun',
-  'story-luha'
+  'demo-eunsol',
+  'story-eunsol'
 ]);
 
 export const LEGACY_MOCK_STUDENT_NAMES = new Set([
@@ -162,15 +152,29 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
           }
         }
 
-        // Clean each story's imageUrls so that only non-empty strings are kept
+        // Clean each story's imageUrls so that only non-empty, genuine URLs are kept
         const cleanedList = mergedList.map(item => {
           const rawUrls = Array.isArray(item.imageUrls) ? item.imageUrls : (item.imageUrl ? [item.imageUrl] : []);
-          const validUrls = rawUrls.filter((u: any) => typeof u === 'string' && u.trim().length > 0);
-          const fallbackCover = validUrls[0] || (typeof item.imageUrl === 'string' && item.imageUrl.trim().length > 0 ? item.imageUrl : '/uploads/eunsol_beach_laugh.jpg');
+          const validUrls = rawUrls.filter((u: any) =>
+            typeof u === 'string' &&
+            u.trim().length > 0 &&
+            !u.includes('eunsol_beach_laugh') &&
+            !u.includes('eunsol_sandcastle') &&
+            !u.includes('eunsol_family_sunset')
+          );
+          const cover = validUrls[0] || (
+            typeof item.imageUrl === 'string' &&
+            item.imageUrl.trim().length > 0 &&
+            !item.imageUrl.includes('eunsol_beach_laugh') &&
+            !item.imageUrl.includes('eunsol_sandcastle') &&
+            !item.imageUrl.includes('eunsol_family_sunset')
+              ? item.imageUrl
+              : ''
+          );
           return {
             ...item,
-            imageUrls: validUrls.length > 0 ? validUrls : [fallbackCover],
-            imageUrl: fallbackCover
+            imageUrls: validUrls,
+            imageUrl: cover
           };
         });
 
@@ -487,10 +491,30 @@ export async function scanAndRecoverBrowserStories(): Promise<{ recoveredStories
               !BANNED_MOCK_STORY_IDS.has(item.id) &&
               item.id !== 'demo-eunsol'
             ) {
+              const rawUrls = Array.isArray(item.imageUrls) ? item.imageUrls : (item.imageUrl ? [item.imageUrl] : []);
+              const validUrls = rawUrls.filter((u: any) =>
+                typeof u === 'string' &&
+                u.trim().length > 0 &&
+                !u.includes('eunsol_beach_laugh') &&
+                !u.includes('eunsol_sandcastle') &&
+                !u.includes('eunsol_family_sunset')
+              );
+              const cleanCover = validUrls[0] || (
+                typeof item.imageUrl === 'string' &&
+                item.imageUrl.trim().length > 0 &&
+                !item.imageUrl.includes('eunsol_beach_laugh') &&
+                !item.imageUrl.includes('eunsol_sandcastle') &&
+                !item.imageUrl.includes('eunsol_family_sunset')
+                  ? item.imageUrl
+                  : ''
+              );
+
               const storyId = item.id || `recovered-story-${item.studentName}-${Date.now()}`;
               recoveredMap.set(storyId, {
                 ...item,
-                id: storyId
+                id: storyId,
+                imageUrls: validUrls,
+                imageUrl: cleanCover
               });
               sourceDescriptions.push(`localStorage [${key}] - ${item.studentName} (${item.title || '제목 없음'})`);
             }
@@ -512,7 +536,29 @@ export async function scanAndRecoverBrowserStories(): Promise<{ recoveredStories
         !BANNED_MOCK_STORY_IDS.has(item.id) &&
         item.id !== 'demo-eunsol'
       ) {
-        recoveredMap.set(item.id, item);
+        const rawUrls = Array.isArray(item.imageUrls) ? item.imageUrls : (item.imageUrl ? [item.imageUrl] : []);
+        const validUrls = rawUrls.filter((u: any) =>
+          typeof u === 'string' &&
+          u.trim().length > 0 &&
+          !u.includes('eunsol_beach_laugh') &&
+          !u.includes('eunsol_sandcastle') &&
+          !u.includes('eunsol_family_sunset')
+        );
+        const cleanCover = validUrls[0] || (
+          typeof item.imageUrl === 'string' &&
+          item.imageUrl.trim().length > 0 &&
+          !item.imageUrl.includes('eunsol_beach_laugh') &&
+          !item.imageUrl.includes('eunsol_sandcastle') &&
+          !item.imageUrl.includes('eunsol_family_sunset')
+            ? item.imageUrl
+            : ''
+        );
+
+        recoveredMap.set(item.id, {
+          ...item,
+          imageUrls: validUrls,
+          imageUrl: cleanCover
+        });
         sourceDescriptions.push(`IndexedDB stories - ${item.studentName} (${item.title || '제목 없음'})`);
       }
     }
@@ -639,13 +685,27 @@ export function getLocalStories(): StoryItem[] {
         .filter((item: any) => item && item.id && !BANNED_MOCK_STORY_IDS.has(item.id))
         .map((item: any) => {
           const rawUrls = Array.isArray(item.imageUrls) ? item.imageUrls : (item.imageUrl ? [item.imageUrl] : []);
-          const validUrls = rawUrls.filter((u: any) => typeof u === 'string' && u.trim().length > 0);
-          const fallbackCover = validUrls[0] || (typeof item.imageUrl === 'string' && item.imageUrl.trim().length > 0 ? item.imageUrl : '/uploads/eunsol_beach_laugh.jpg');
+          const validUrls = rawUrls.filter((u: any) =>
+            typeof u === 'string' &&
+            u.trim().length > 0 &&
+            !u.includes('eunsol_beach_laugh') &&
+            !u.includes('eunsol_sandcastle') &&
+            !u.includes('eunsol_family_sunset')
+          );
+          const fallbackCover = validUrls[0] || (
+            typeof item.imageUrl === 'string' &&
+            item.imageUrl.trim().length > 0 &&
+            !item.imageUrl.includes('eunsol_beach_laugh') &&
+            !item.imageUrl.includes('eunsol_sandcastle') &&
+            !item.imageUrl.includes('eunsol_family_sunset')
+              ? item.imageUrl
+              : ''
+          );
 
           return {
             ...item,
             imageUrl: fallbackCover,
-            imageUrls: validUrls.length > 0 ? validUrls : [fallbackCover]
+            imageUrls: validUrls
           };
         });
 

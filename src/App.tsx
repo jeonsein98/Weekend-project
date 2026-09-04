@@ -182,7 +182,7 @@ export default function App() {
       postToGas(gasConfig.webAppUrl, savedStory);
     }
 
-    showToast('사진과 이야기가 서버에 안전하게 영구 저장되었습니다! (직접 삭제하기 전까지 보존됩니다)', 'success');
+    showToast('사진과 이야기가 저장되었습니다!', 'success');
 
     // Automatically switch to PPT view of that week so teacher/students can see the slide!
     setSelectedWeek(savedStory.week);
@@ -197,16 +197,15 @@ export default function App() {
 
   // Reset Sample Data
   const handleResetSampleData = () => {
-    if (!confirm('샘플 데이터(김은솔 어린이 이야기)로 되돌리시겠습니까?')) return;
-    setStories(INITIAL_STORIES);
-    saveLocalStories(INITIAL_STORIES);
-    saveStoryToServer(INITIAL_STORIES[0]);
-    showToast('예시 데이터로 초기화되었습니다.', 'info');
+    if (!confirm('데이터를 초기화하시겠습니까?')) return;
+    setStories([]);
+    saveLocalStories([]);
+    showToast('데이터가 초기화되었습니다.', 'info');
   };
 
-  // Delete Story (Permanent server deletion only upon explicit user request)
+  // Delete Story
   const handleDeleteStory = async (id: string) => {
-    if (!confirm('이 주말 이야기를 삭제하시겠습니까? (삭제하기 전까지 사진과 내용은 안전하게 보존됩니다)')) {
+    if (!confirm('이 주말 이야기를 삭제하시겠습니까?')) {
       return;
     }
     const updated = await deleteStoryFromServer(id);

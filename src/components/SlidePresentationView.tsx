@@ -31,9 +31,7 @@ import {
 import { StoryItem, RosterStudent, WEEKS_LIST, isWeekMatch } from '../types';
 import { InstagramStoryBar } from './InstagramStoryBar';
 import { WeekTabBar } from './WeekTabBar';
-import eunsolBeachLaugh from '../assets/images/eunsol_beach_laugh_1786166395268.jpg';
-import eunsolSandcastle from '../assets/images/eunsol_sandcastle_1786166415943.jpg';
-import eunsolFamilySunset from '../assets/images/eunsol_family_sunset_1786166439449.jpg';
+import { RefreshCw, Camera } from 'lucide-react';
 
 interface SlidePresentationViewProps {
   stories: StoryItem[];
@@ -60,13 +58,7 @@ const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ pho
       <img
         src={currentUrl}
         alt=""
-        onError={() => {
-          if (currentUrl !== eunsolBeachLaugh) {
-            setCurrentUrl(eunsolBeachLaugh);
-          } else {
-            setHasError(true);
-          }
-        }}
+        onError={() => setHasError(true)}
         className="w-full h-full object-cover rounded-full"
       />
     );
@@ -75,20 +67,11 @@ const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ pho
   const displayName = studentName.length >= 2 ? studentName.slice(-2) : studentName;
 
   return (
-    <div className="w-full h-full rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-xs sm:text-sm font-extrabold select-none">
+    <div className="w-full h-full rounded-full bg-linear-to-br from-amber-500 to-pink-500 flex items-center justify-center text-white text-xs sm:text-sm font-extrabold select-none shadow-xs">
       {displayName}
     </div>
   );
 };
-
-const DEFAULT_FALLBACK_IMAGES = [
-  eunsolBeachLaugh,
-  eunsolSandcastle,
-  eunsolFamilySunset,
-  '/eunsol_beach_laugh.jpg',
-  '/eunsol_sandcastle.jpg',
-  '/eunsol_family_sunset.jpg'
-];
 
 interface SlidePhotoProps {
   src?: string;
@@ -105,45 +88,52 @@ const SlidePhoto: React.FC<SlidePhotoProps> = ({
   alt,
   style,
   className,
-  fallbackIndex = 0,
   fitMode = 'contain',
   showBackdropBlur = true
 }) => {
-  const getInitialSrc = (inputSrc?: string, fbIdx = 0) => {
-    if (inputSrc && typeof inputSrc === 'string' && inputSrc.trim().length > 0) {
-      return inputSrc;
-    }
-    return DEFAULT_FALLBACK_IMAGES[fbIdx % DEFAULT_FALLBACK_IMAGES.length];
-  };
-
-  const [currentSrc, setCurrentSrc] = useState<string>(() => getInitialSrc(src, fallbackIndex));
-  const [fallbackAttempt, setFallbackAttempt] = useState(0);
+  const [currentSrc, setCurrentSrc] = useState<string | undefined>(src);
+  const [retryCount, setRetryCount] = useState(0);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
-    setCurrentSrc(getInitialSrc(src, fallbackIndex));
+    setCurrentSrc(src);
+    setRetryCount(0);
     setHasError(false);
-    setFallbackAttempt(0);
-  }, [src, fallbackIndex]);
+  }, [src]);
 
   const handleError = () => {
-    if (fallbackAttempt < DEFAULT_FALLBACK_IMAGES.length) {
-      const nextFallback = DEFAULT_FALLBACK_IMAGES[(fallbackIndex + fallbackAttempt) % DEFAULT_FALLBACK_IMAGES.length];
-      setFallbackAttempt((prev) => prev + 1);
-      if (currentSrc !== nextFallback) {
-        setCurrentSrc(nextFallback);
-        return;
-      }
+    if (retryCount < 2 && src) {
+      setRetryCount((prev) => prev + 1);
+      setTimeout(() => {
+        const sep = src.includes('?') ? '&' : '?';
+        setCurrentSrc(`${src}${sep}retry=${Date.now()}`);
+      }, 700);
+    } else {
+      setHasError(true);
     }
-    setHasError(true);
   };
 
-  if (hasError || !currentSrc) {
+  if (!src || hasError) {
     return (
-      <div className="w-full h-full bg-[#18181B] flex flex-col items-center justify-center p-6 text-center text-white/90">
-        <Sparkles className="w-12 h-12 text-pink-400 mb-3 animate-pulse" />
-        <span className="text-base font-extrabold text-pink-200">{alt || '사진을 준비 중입니다'}</span>
-        <span className="text-xs text-white/50 mt-1">소중한 추억이 안전하게 보존되어 있습니다</span>
+      <div className="w-full h-full bg-[#18181B] flex flex-col items-center justify-center p-6 text-center text-white/90 select-none">
+        <Camera className="w-12 h-12 text-amber-400/80 mb-3" />
+        <span className="text-base font-extrabold text-amber-100">{alt || '사진을 준비 중입니다'}</span>
+        <span className="text-xs text-white/50 mt-1">소중한 추억 사진이 안전하게 유지되고 있습니다</span>
+        {src && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setHasError(false);
+              setRetryCount(0);
+              const sep = src.includes('?') ? '&' : '?';
+              setCurrentSrc(`${src}${sep}reload=${Date.now()}`);
+            }}
+            className="mt-3 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-xs font-bold flex items-center gap-1.5 text-white transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            사진 다시 불러오기
+          </button>
+        )}
       </div>
     );
   }
@@ -151,7 +141,7 @@ const SlidePhoto: React.FC<SlidePhotoProps> = ({
   if (fitMode === 'contain') {
     return (
       <div className="relative w-full h-full flex items-center justify-center overflow-hidden bg-black select-none">
-        {/* Ambient Blur Backdrop: 사진 색감으로 여백을 채워 몰입감 향상 */}
+        {/* Ambient Blur Backdrop */}
         {showBackdropBlur && (
           <img
             src={currentSrc}
@@ -160,7 +150,7 @@ const SlidePhoto: React.FC<SlidePhotoProps> = ({
             className="absolute inset-0 w-full h-full object-cover blur-2xl opacity-35 scale-110 pointer-events-none select-none"
           />
         )}
-        {/* Full Uncropped Photo: 원본 비율 100% 보존, 얼굴/모래성 등 잘림 방지 */}
+        {/* Full Uncropped Photo: 원본 비율 100% 보존 */}
         <img
           src={currentSrc}
           alt={alt}
@@ -828,7 +818,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                   ? currentStory.imageUrls
                   : (currentStory.imageUrl ? [currentStory.imageUrl] : []);
                 const validUrls = rawUrls.filter((u: any) => typeof u === 'string' && u.trim().length > 0);
-                const photos = validUrls.length > 0 ? validUrls : [DEFAULT_FALLBACK_IMAGES[0]];
+                const photos = validUrls.length > 0 ? validUrls : [''];
 
                 // If only 1 photo
                 if (photos.length === 1) {
