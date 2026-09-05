@@ -45,7 +45,7 @@ export async function savePhotoToIndexedDB(
   dataUrl: string,
   meta?: { studentName?: string; week?: string; photoIndex?: number }
 ): Promise<void> {
-  if (!photoKey || !dataUrl || typeof dataUrl !== 'string') return;
+  if (!photoKey || !dataUrl || typeof dataUrl !== 'string' || dataUrl.startsWith('idb:')) return;
   try {
     const db = await openDB();
     const tx = db.transaction(STORE_PHOTOS, 'readwrite');
@@ -67,7 +67,7 @@ export async function savePhotoToIndexedDB(
  * Get a photo by its exact photoKey
  */
 export async function getPhotoFromIndexedDB(photoKey: string): Promise<string | null> {
-  if (!photoKey) return null;
+  if (!photoKey || photoKey.startsWith('idb:')) return null;
   try {
     const db = await openDB();
     return new Promise((resolve) => {
@@ -75,8 +75,9 @@ export async function getPhotoFromIndexedDB(photoKey: string): Promise<string | 
       const store = tx.objectStore(STORE_PHOTOS);
       const req = store.get(photoKey);
       req.onsuccess = () => {
-        if (req.result && req.result.dataUrl) {
-          resolve(req.result.dataUrl);
+        const val = req.result?.dataUrl || null;
+        if (val && typeof val === 'string' && !val.startsWith('idb:')) {
+          resolve(val);
         } else {
           resolve(null);
         }
@@ -118,7 +119,8 @@ export async function findPhotoForStudent(
               (!week || week === '전체' || it.week === week) &&
               it.photoIndex === photoIndex &&
               typeof it.dataUrl === 'string' &&
-              it.dataUrl.length > 0
+              it.dataUrl.length > 0 &&
+              !it.dataUrl.startsWith('idb:')
           );
           if (exact) return resolve(exact.dataUrl);
 
@@ -129,7 +131,8 @@ export async function findPhotoForStudent(
               it.studentName?.trim().toLowerCase() === cleanName &&
               (!week || week === '전체' || it.week === week) &&
               typeof it.dataUrl === 'string' &&
-              it.dataUrl.length > 0
+              it.dataUrl.length > 0 &&
+              !it.dataUrl.startsWith('idb:')
           );
           if (anyForWeek) return resolve(anyForWeek.dataUrl);
 
@@ -139,7 +142,8 @@ export async function findPhotoForStudent(
               it &&
               it.studentName?.trim().toLowerCase() === cleanName &&
               typeof it.dataUrl === 'string' &&
-              it.dataUrl.length > 0
+              it.dataUrl.length > 0 &&
+              !it.dataUrl.startsWith('idb:')
           );
           if (anyStudentPhoto) return resolve(anyStudentPhoto.dataUrl);
 
@@ -166,11 +170,13 @@ export async function findPhotoForStudent(
           );
           if (matchedStory) {
             const urls = (matchedStory.imageUrls || []).filter(
-              (u) => typeof u === 'string' && u.trim().length > 0
+              (u) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
             );
             if (urls[photoIndex]) return resolve(urls[photoIndex]);
             if (urls[0]) return resolve(urls[0]);
-            if (matchedStory.imageUrl) return resolve(matchedStory.imageUrl);
+            if (matchedStory.imageUrl && !matchedStory.imageUrl.startsWith('idb:')) {
+              return resolve(matchedStory.imageUrl);
+            }
           }
           resolve(null);
         };
@@ -189,7 +195,7 @@ export async function findPhotoForStudent(
           if (req.result && req.result.draft) {
             const draft = req.result.draft;
             const urls = (draft.imageUrls || []).filter(
-              (u: any) => typeof u === 'string' && u.trim().length > 0
+              (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
             );
             if (urls[photoIndex]) return resolve(urls[photoIndex]);
             if (urls[0]) return resolve(urls[0]);
@@ -227,10 +233,10 @@ export async function saveStoryToIndexedDB(story: StoryItem): Promise<void> {
     let mergedStory = { ...story };
     if (existing) {
       const existingUrls = (existing.imageUrls || []).filter(
-        (u) => typeof u === 'string' && u.trim().length > 0
+        (u) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
       );
       const incomingUrls = (story.imageUrls || []).filter(
-        (u) => typeof u === 'string' && u.trim().length > 0
+        (u) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
       );
 
       // If incoming has fewer photos or empty cover, preserve existing photos
@@ -244,9 +250,9 @@ export async function saveStoryToIndexedDB(story: StoryItem): Promise<void> {
     const store = tx.objectStore(STORE_STORIES);
     store.put(mergedStory);
 
-    // Also permanently archive photos into STORE_PHOTOS
+    // Also permanently archive photos into STORE_PHOTOS (only real images)
     const finalUrls = (mergedStory.imageUrls || []).filter(
-      (u) => typeof u === 'string' && u.trim().length > 0
+      (u) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
     );
     for (let idx = 0; idx < finalUrls.length; idx++) {
       const url = finalUrls[idx];

@@ -52,11 +52,11 @@ const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ pho
   useEffect(() => {
     if (!photoUrl || photoUrl.startsWith('idb:')) {
       findPhotoForStudent(studentName).then((cached) => {
-        if (cached) {
+        if (cached && !cached.startsWith('idb:')) {
           setCurrentUrl(cached);
           setHasError(false);
         } else {
-          setCurrentUrl(photoUrl?.startsWith('idb:') ? undefined : photoUrl);
+          setCurrentUrl(undefined);
         }
       });
     } else {
@@ -68,7 +68,7 @@ const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ pho
   const handleAvatarError = async () => {
     try {
       const cached = await findPhotoForStudent(studentName);
-      if (cached && cached !== currentUrl) {
+      if (cached && !cached.startsWith('idb:') && cached !== currentUrl) {
         setCurrentUrl(cached);
         setHasError(false);
         return;
@@ -77,7 +77,7 @@ const SlideAvatar: React.FC<{ photoUrl?: string; studentName: string }> = ({ pho
     setHasError(true);
   };
 
-  if (currentUrl && !hasError) {
+  if (currentUrl && !currentUrl.startsWith('idb:') && !hasError) {
     return (
       <img
         src={currentUrl}
@@ -114,6 +114,7 @@ const SlidePhoto: React.FC<SlidePhotoProps> = ({
   studentName,
   style,
   className,
+  fallbackIndex = 0,
   fitMode = 'contain',
   showBackdropBlur = true
 }) => {
@@ -125,45 +126,60 @@ const SlidePhoto: React.FC<SlidePhotoProps> = ({
   useEffect(() => {
     if (!src || src.startsWith('idb:')) {
       if (studentName) {
-        findPhotoForStudent(studentName).then((cached) => {
-          if (cached) {
+        findPhotoForStudent(studentName, undefined, fallbackIndex).then((cached) => {
+          if (cached && !cached.startsWith('idb:')) {
             setCurrentSrc(cached);
             setHasError(false);
+            // Proactively heal on server in background if it's base64
+            if (cached.startsWith('data:')) {
+              fetch('/api/upload-photo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  imageBase64: cached,
+                  name: `repaired_${studentName}_${fallbackIndex}`
+                })
+              }).catch(() => {});
+            }
           } else {
-            setCurrentSrc(src?.startsWith('idb:') ? undefined : src);
+            setCurrentSrc(undefined);
           }
         });
+      } else {
+        setCurrentSrc(undefined);
       }
     } else {
       setCurrentSrc(src);
       setRetryCount(0);
       setHasError(false);
     }
-  }, [src, studentName]);
+  }, [src, studentName, fallbackIndex]);
 
   const handleError = async () => {
     if (!isSelfHealing && studentName) {
       setIsSelfHealing(true);
       try {
-        const idbPhoto = await findPhotoForStudent(studentName);
-        if (idbPhoto && idbPhoto !== currentSrc) {
+        const idbPhoto = await findPhotoForStudent(studentName, undefined, fallbackIndex);
+        if (idbPhoto && !idbPhoto.startsWith('idb:') && idbPhoto !== currentSrc) {
           setCurrentSrc(idbPhoto);
           setHasError(false);
           // Restore on server in background
-          fetch('/api/upload-photo', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              imageBase64: idbPhoto,
-              name: `repaired_${studentName}_${Date.now()}`
-            })
-          }).catch(() => {});
+          if (idbPhoto.startsWith('data:')) {
+            fetch('/api/upload-photo', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                imageBase64: idbPhoto,
+                name: `repaired_${studentName}_${Date.now()}`
+              })
+            }).catch(() => {});
+          }
           return;
         }
       } catch {}
     }
 
-    if (retryCount < 2 && src && !src.startsWith('data:')) {
+    if (retryCount < 2 && src && !src.startsWith('data:') && !src.startsWith('idb:')) {
       setRetryCount((prev) => prev + 1);
       setTimeout(() => {
         const sep = src.includes('?') ? '&' : '?';
@@ -174,27 +190,34 @@ const SlidePhoto: React.FC<SlidePhotoProps> = ({
     }
   };
 
-  if (!src || hasError) {
+  if (!currentSrc || hasError) {
     return (
       <div className="w-full h-full bg-[#18181B] flex flex-col items-center justify-center p-6 text-center text-white/90 select-none">
         <Camera className="w-12 h-12 text-amber-400/80 mb-3" />
         <span className="text-base font-extrabold text-amber-100">{alt || '사진을 준비 중입니다'}</span>
         <span className="text-xs text-white/50 mt-1">소중한 추억 사진이 안전하게 유지되고 있습니다</span>
-        {src && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setHasError(false);
-              setRetryCount(0);
+        <button
+          onClick={async (e) => {
+            e.stopPropagation();
+            setHasError(false);
+            setRetryCount(0);
+            if (studentName) {
+              const cached = await findPhotoForStudent(studentName, undefined, fallbackIndex);
+              if (cached && !cached.startsWith('idb:')) {
+                setCurrentSrc(cached);
+                return;
+              }
+            }
+            if (src && !src.startsWith('idb:')) {
               const sep = src.includes('?') ? '&' : '?';
               setCurrentSrc(`${src}${sep}reload=${Date.now()}`);
-            }}
-            className="mt-3 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-xs font-bold flex items-center gap-1.5 text-white transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            사진 다시 불러오기
-          </button>
-        )}
+            }
+          }}
+          className="mt-3 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-xs font-bold flex items-center gap-1.5 text-white transition-colors"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+          사진 다시 불러오기
+        </button>
       </div>
     );
   }

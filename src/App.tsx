@@ -20,7 +20,8 @@ import {
   deleteStoryFromServer,
   updateReactionOnServer,
   fetchRosterFromServer,
-  saveRosterToServer
+  saveRosterToServer,
+  healLegacyStories
 } from './lib/storage';
 import { INITIAL_STORIES } from './lib/defaultData';
 
@@ -52,6 +53,13 @@ export default function App() {
         if (serverRoster && serverRoster.length > 0) {
           setRoster(serverRoster);
         }
+
+        // Proactively heal any legacy idb: references in local cache
+        healLegacyStories().then((healed) => {
+          if (healed && healed.length > 0) {
+            setStories(healed);
+          }
+        }).catch(() => {});
       } catch (e) {
         console.warn('Initial server fetch warning:', e);
       } finally {
@@ -96,12 +104,15 @@ export default function App() {
                       (u: string) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
                     );
                     const bestPhotos = newPhotos.length >= exPhotos.length ? newPhotos : exPhotos;
+                    const cleanCover = (s.imageUrl && !s.imageUrl.startsWith('idb:'))
+                      ? s.imageUrl
+                      : ((existing.imageUrl && !existing.imageUrl.startsWith('idb:')) ? existing.imageUrl : (bestPhotos[0] || ''));
                     const merged: StoryItem = {
                       ...existing,
                       ...s,
                       id: s.id || existing.id,
-                      imageUrls: bestPhotos.length > 0 ? bestPhotos : (existing.imageUrls || []),
-                      imageUrl: bestPhotos[0] || s.imageUrl || existing.imageUrl || ''
+                      imageUrls: bestPhotos.length > 0 ? bestPhotos : (existing.imageUrls || []).filter(u => typeof u === 'string' && !u.startsWith('idb:')),
+                      imageUrl: bestPhotos[0] || cleanCover
                     };
                     map.set(k, merged);
                   }

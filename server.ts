@@ -202,6 +202,14 @@ function writeRoster(roster: any[]): boolean {
   }
 }
 
+// Mutex lock for atomic story and file operations to prevent race conditions when multiple users upload concurrently
+let storyWriteQueue = Promise.resolve();
+function withStoryLock<T>(fn: () => Promise<T> | T): Promise<T> {
+  const next = storyWriteQueue.then(() => fn());
+  storyWriteQueue = next.catch(() => {}) as Promise<void>;
+  return next;
+}
+
 function saveBase64Image(base64Str: string, prefix = 'photo'): string {
   if (!base64Str || typeof base64Str !== 'string') return '';
   if (!base64Str.startsWith('data:')) {
@@ -223,6 +231,13 @@ function saveBase64Image(base64Str: string, prefix = 'photo'): string {
     const buffer = Buffer.from(rawData, 'base64');
     const safePrefix = (prefix || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
     const filename = `${safePrefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+
+    [UPLOADS_DIR, DATA_UPLOADS_DIR].forEach((d) => {
+      if (!fs.existsSync(d)) {
+        try { fs.mkdirSync(d, { recursive: true }); } catch {}
+      }
+    });
+
     fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
     try {
       fs.writeFileSync(path.join(DATA_UPLOADS_DIR, filename), buffer);
@@ -475,143 +490,156 @@ app.get('/api/stories', (_req, res) => {
 
 // 2. Save or update a story (stores photos permanently on disk)
 app.post('/api/stories', (req, res) => {
-  try {
-    const storyData = req.body;
-    if (!storyData || !storyData.studentName) {
-      return res.status(400).json({ success: false, error: '원아 이름이 필요합니다.' });
+  return withStoryLock(async () => {
+    try {
+      const storyData = req.body;
+      if (!storyData || !storyData.studentName) {
+        return res.status(400).json({ success: false, error: '원아 이름이 필요합니다.' });
+      }
+
+      const currentStories = readStories();
+      const processedStory = processStoryImages(storyData);
+      let updatedStories: any[];
+      let returnStory: any;
+
+      // Match existing story by ID or (studentName + normalized week)
+      const existingIdx = currentStories.findIndex((s: any) => {
+        if (processedStory.id && s.id === processedStory.id) return true;
+        return isSameStudentAndWeek(s.studentName, s.week, processedStory.studentName, processedStory.week);
+      });
+
+      if (existingIdx !== -1) {
+        const existing = currentStories[existingIdx];
+        const existingImages = (existing.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
+        const newImages = (processedStory.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
+        // If incoming has valid photos, use them. If incoming has no photos, strictly preserve existing server photos!
+        const finalImages = newImages.length > 0 ? newImages : existingImages;
+
+        const merged = {
+          ...existing,
+          ...processedStory,
+          id: existing.id || processedStory.id,
+          imageUrls: finalImages,
+          imageUrl: finalImages[0] || existing.imageUrl || processedStory.imageUrl || '',
+          updatedAt: new Date().toISOString()
+        };
+        currentStories[existingIdx] = merged;
+        updatedStories = currentStories;
+        returnStory = merged;
+      } else {
+        processedStory.id = processedStory.id || ('story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6));
+        processedStory.createdAt = processedStory.createdAt || new Date().toISOString();
+        updatedStories = [processedStory, ...currentStories];
+        returnStory = processedStory;
+      }
+
+      writeStories(updatedStories);
+      return res.json({ success: true, story: returnStory, stories: updatedStories });
+    } catch (err: any) {
+      console.error('Failed to save story on server:', err);
+      return res.status(500).json({ success: false, error: err.message || '서버 저장 실패' });
     }
-
-    const currentStories = readStories();
-    const processedStory = processStoryImages(storyData);
-    let updatedStories: any[];
-
-    // Match existing story by ID or (studentName + normalized week)
-    const existingIdx = currentStories.findIndex((s: any) => {
-      if (processedStory.id && s.id === processedStory.id) return true;
-      return isSameStudentAndWeek(s.studentName, s.week, processedStory.studentName, processedStory.week);
-    });
-
-    if (existingIdx !== -1) {
-      const existing = currentStories[existingIdx];
-      const existingImages = (existing.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
-      const newImages = (processedStory.imageUrls || []).filter((u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
-      const finalImages = newImages.length > 0 ? newImages : existingImages;
-
-      currentStories[existingIdx] = {
-        ...existing,
-        ...processedStory,
-        id: existing.id || processedStory.id,
-        imageUrls: finalImages,
-        imageUrl: finalImages[0] || existing.imageUrl || processedStory.imageUrl || '',
-        updatedAt: new Date().toISOString()
-      };
-      updatedStories = currentStories;
-    } else {
-      processedStory.id = processedStory.id || ('story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6));
-      processedStory.createdAt = processedStory.createdAt || new Date().toISOString();
-      updatedStories = [processedStory, ...currentStories];
-    }
-
-    writeStories(updatedStories);
-    return res.json({ success: true, story: processedStory, stories: updatedStories });
-  } catch (err: any) {
-    console.error('Failed to save story on server:', err);
-    return res.status(500).json({ success: false, error: err.message || '서버 저장 실패' });
-  }
+  });
 });
 
 // 3. Delete a story (Only deleted when explicit delete requested!)
 app.delete('/api/stories/:id', (req, res) => {
-  try {
-    const { id } = req.params;
-    const currentStories = readStories();
-    const filtered = currentStories.filter((s: any) => s.id !== id);
-    writeStories(filtered);
-    return res.json({ success: true, stories: filtered });
-  } catch (err: any) {
-    console.error('Failed to delete story on server:', err);
-    return res.status(500).json({ success: false, error: err.message });
-  }
+  return withStoryLock(async () => {
+    try {
+      const { id } = req.params;
+      const currentStories = readStories();
+      const filtered = currentStories.filter((s: any) => s.id !== id);
+      writeStories(filtered);
+      return res.json({ success: true, stories: filtered });
+    } catch (err: any) {
+      console.error('Failed to delete story on server:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
 });
 
 // 4. Update reaction emoji count
 app.post('/api/stories/:id/reaction', (req, res) => {
-  try {
-    const { id } = req.params;
-    const { emoji } = req.body;
-    if (!emoji) return res.status(400).json({ error: 'Emoji is required' });
+  return withStoryLock(async () => {
+    try {
+      const { id } = req.params;
+      const { emoji } = req.body;
+      if (!emoji) return res.status(400).json({ error: 'Emoji is required' });
 
-    const currentStories = readStories();
-    const target = currentStories.find((s: any) => s.id === id);
-    if (!target) {
-      return res.status(404).json({ error: 'Story not found' });
+      const currentStories = readStories();
+      const target = currentStories.find((s: any) => s.id === id);
+      if (!target) {
+        return res.status(404).json({ error: 'Story not found' });
+      }
+      target.reactions = target.reactions || {};
+      target.reactions[emoji] = (target.reactions[emoji] || 0) + 1;
+      writeStories(currentStories);
+      return res.json({ success: true, reactions: target.reactions, stories: currentStories });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
     }
-    target.reactions = target.reactions || {};
-    target.reactions[emoji] = (target.reactions[emoji] || 0) + 1;
-    writeStories(currentStories);
-    return res.json({ success: true, reactions: target.reactions, stories: currentStories });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 // 5. Bulk sync & recovery (pulls client offline/local storage data onto server)
 app.post('/api/stories/bulk-sync', (req, res) => {
-  try {
-    const { stories: clientStories } = req.body;
-    if (!Array.isArray(clientStories) || clientStories.length === 0) {
-      return res.json({ success: true, merged: 0, stories: readStories() });
-    }
-
-    const currentStories = readStories();
-    let mergedCount = 0;
-
-    for (const clientStory of clientStories) {
-      if (!clientStory || !clientStory.studentName || BANNED_MOCK_STORY_IDS.has(clientStory.id)) continue;
-
-      const existingIdx = currentStories.findIndex((s: any) => {
-        if (clientStory.id && s.id === clientStory.id) return true;
-        return isSameStudentAndWeek(s.studentName, s.week, clientStory.studentName, clientStory.week);
-      });
-
-      const processed = processStoryImages(clientStory);
-
-      if (existingIdx !== -1) {
-        const existingImages = (currentStories[existingIdx].imageUrls || []).filter(
-          (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
-        );
-        const clientImages = (processed.imageUrls || []).filter(
-          (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
-        );
-        // Only adopt client images if client has valid photos, otherwise strictly preserve server photos
-        const bestImages = clientImages.length >= existingImages.length && clientImages.length > 0
-          ? clientImages
-          : existingImages;
-        currentStories[existingIdx] = {
-          ...currentStories[existingIdx],
-          ...processed,
-          id: currentStories[existingIdx].id || processed.id,
-          imageUrls: bestImages,
-          imageUrl: bestImages[0] || currentStories[existingIdx].imageUrl || processed.imageUrl || '',
-          updatedAt: new Date().toISOString()
-        };
-        mergedCount++;
-      } else {
-        processed.id = processed.id || 'story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
-        currentStories.push(processed);
-        mergedCount++;
+  return withStoryLock(async () => {
+    try {
+      const { stories: clientStories } = req.body;
+      if (!Array.isArray(clientStories) || clientStories.length === 0) {
+        return res.json({ success: true, merged: 0, stories: readStories() });
       }
-    }
 
-    if (mergedCount > 0) {
-      writeStories(currentStories);
-    }
+      const currentStories = readStories();
+      let mergedCount = 0;
 
-    return res.json({ success: true, merged: mergedCount, stories: currentStories });
-  } catch (err: any) {
-    console.error('Bulk sync failed:', err);
-    return res.status(500).json({ success: false, error: err.message });
-  }
+      for (const clientStory of clientStories) {
+        if (!clientStory || !clientStory.studentName || BANNED_MOCK_STORY_IDS.has(clientStory.id)) continue;
+
+        const existingIdx = currentStories.findIndex((s: any) => {
+          if (clientStory.id && s.id === clientStory.id) return true;
+          return isSameStudentAndWeek(s.studentName, s.week, clientStory.studentName, clientStory.week);
+        });
+
+        const processed = processStoryImages(clientStory);
+
+        if (existingIdx !== -1) {
+          const existingImages = (currentStories[existingIdx].imageUrls || []).filter(
+            (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+          );
+          const clientImages = (processed.imageUrls || []).filter(
+            (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+          );
+          // Only adopt client images if client has valid photos, otherwise strictly preserve server photos
+          const bestImages = clientImages.length >= existingImages.length && clientImages.length > 0
+            ? clientImages
+            : existingImages;
+          currentStories[existingIdx] = {
+            ...currentStories[existingIdx],
+            ...processed,
+            id: currentStories[existingIdx].id || processed.id,
+            imageUrls: bestImages,
+            imageUrl: bestImages[0] || currentStories[existingIdx].imageUrl || processed.imageUrl || '',
+            updatedAt: new Date().toISOString()
+          };
+          mergedCount++;
+        } else {
+          processed.id = processed.id || 'story-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+          currentStories.push(processed);
+          mergedCount++;
+        }
+      }
+
+      if (mergedCount > 0) {
+        writeStories(currentStories);
+      }
+
+      return res.json({ success: true, merged: mergedCount, stories: currentStories });
+    } catch (err: any) {
+      console.error('Bulk sync failed:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
 });
 
 // 6. Direct photo upload endpoints (supports both /api/upload and /api/upload-photo)

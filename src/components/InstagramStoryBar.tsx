@@ -20,11 +20,11 @@ const StudentStoryAvatar: React.FC<{ photoUrl?: string; studentName: string }> =
   useEffect(() => {
     if (!photoUrl || photoUrl.startsWith('idb:')) {
       findPhotoForStudent(studentName).then((cached) => {
-        if (cached) {
+        if (cached && !cached.startsWith('idb:')) {
           setCurrentUrl(cached);
           setHasError(false);
         } else {
-          setCurrentUrl(photoUrl?.startsWith('idb:') ? undefined : photoUrl);
+          setCurrentUrl(undefined);
         }
       });
     } else {
@@ -36,7 +36,7 @@ const StudentStoryAvatar: React.FC<{ photoUrl?: string; studentName: string }> =
   const handleAvatarError = async () => {
     try {
       const cached = await findPhotoForStudent(studentName);
-      if (cached && cached !== currentUrl) {
+      if (cached && !cached.startsWith('idb:') && cached !== currentUrl) {
         setCurrentUrl(cached);
         setHasError(false);
         return;
@@ -45,7 +45,7 @@ const StudentStoryAvatar: React.FC<{ photoUrl?: string; studentName: string }> =
     setHasError(true);
   };
 
-  if (currentUrl && !hasError) {
+  if (currentUrl && !currentUrl.startsWith('idb:') && !hasError) {
     return (
       <img
         src={currentUrl}

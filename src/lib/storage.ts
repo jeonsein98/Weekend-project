@@ -8,7 +8,8 @@ import {
   saveRosterToIndexedDB,
   getRosterFromIndexedDB,
   getAllDraftsFromIndexedDB,
-  getAllPhotosFromIndexedDB
+  getAllPhotosFromIndexedDB,
+  findPhotoForStudent
 } from './idb';
 
 const STORAGE_KEY_STORIES = 'weekend_stories_data_v1';
@@ -271,30 +272,94 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
  * All base64 images will be converted to permanent image files on the server disk.
  */
 export async function saveStoryToServer(story: StoryItem): Promise<{ success: boolean; story?: StoryItem; stories?: StoryItem[] }> {
-  // Always update local cache and IndexedDB first for instant UI response and zero data loss
+  let storyToSave = { ...story };
+
+  // 1. If story contains any raw base64 images, proactively upload them to disk first
+  if (Array.isArray(storyToSave.imageUrls) && storyToSave.imageUrls.some(u => typeof u === 'string' && u.startsWith('data:'))) {
+    try {
+      const uploadedUrls = await Promise.all(
+        storyToSave.imageUrls.map(async (u, idx) => {
+          if (typeof u === 'string' && u.startsWith('data:')) {
+            try {
+              const upRes = await fetch('/api/upload-photo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  imageBase64: u,
+                  name: `photo_${storyToSave.studentName || 'child'}_${idx + 1}`
+                })
+              });
+              if (upRes.ok) {
+                const upData = await upRes.json();
+                if (upData.url) return upData.url;
+              }
+            } catch (e) {
+              console.warn('[Storage] Pre-upload error:', e);
+            }
+          }
+          return u;
+        })
+      );
+      storyToSave.imageUrls = uploadedUrls.filter(u => typeof u === 'string' && !u.startsWith('idb:'));
+      storyToSave.imageUrl = storyToSave.imageUrls[0] || '';
+    } catch (err) {
+      console.warn('[Storage] Photo upload preprocessing failed:', err);
+    }
+  }
+
+  // 2. Also ensure single cover image is permanent
+  if (typeof storyToSave.imageUrl === 'string' && storyToSave.imageUrl.startsWith('data:')) {
+    try {
+      const upRes = await fetch('/api/upload-photo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: storyToSave.imageUrl,
+          name: `cover_${storyToSave.studentName || 'child'}`
+        })
+      });
+      if (upRes.ok) {
+        const upData = await upRes.json();
+        if (upData.url) {
+          storyToSave.imageUrl = upData.url;
+          if (!storyToSave.imageUrls || storyToSave.imageUrls.length === 0) {
+            storyToSave.imageUrls = [upData.url];
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Filter out any invalid idb: pseudo strings
+  storyToSave.imageUrls = (storyToSave.imageUrls || []).filter(u => typeof u === 'string' && !u.startsWith('idb:'));
+  if (storyToSave.imageUrl && storyToSave.imageUrl.startsWith('idb:')) {
+    storyToSave.imageUrl = storyToSave.imageUrls[0] || '';
+  }
+
+  // Update local cache and IndexedDB
   const localList = getLocalStories();
   const makeStoryKey = (s: { studentName: string; week?: string }) =>
     `${s.studentName.trim().toLowerCase()}_${normalizeWeek(s.week)}`;
 
   const existingIdx = localList.findIndex(
-    (s) => s.id === story.id || makeStoryKey(s) === makeStoryKey(story)
+    (s) => s.id === storyToSave.id || makeStoryKey(s) === makeStoryKey(storyToSave)
   );
 
   let updatedLocal: StoryItem[];
   if (existingIdx !== -1) {
     updatedLocal = [...localList];
-    updatedLocal[existingIdx] = { ...updatedLocal[existingIdx], ...story };
+    updatedLocal[existingIdx] = { ...updatedLocal[existingIdx], ...storyToSave };
   } else {
-    updatedLocal = [story, ...localList];
+    updatedLocal = [storyToSave, ...localList];
   }
   saveLocalStories(updatedLocal);
-  saveStoryToIndexedDB(story);
+  saveStoryToIndexedDB(storyToSave);
 
   try {
     const res = await fetch('/api/stories', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(story)
+      body: JSON.stringify(storyToSave)
     });
     if (res.ok) {
       const data = await res.json();
@@ -311,7 +376,7 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
     console.error('[Storage] Save story to server error:', err);
   }
 
-  return { success: true, story, stories: updatedLocal };
+  return { success: true, story: storyToSave, stories: updatedLocal };
 }
 
 /**
@@ -852,6 +917,7 @@ export function getLocalStories(): StoryItem[] {
           const validUrls = rawUrls.filter((u: any) =>
             typeof u === 'string' &&
             u.trim().length > 0 &&
+            !u.startsWith('idb:') &&
             !u.includes('eunsol_beach_laugh') &&
             !u.includes('eunsol_sandcastle') &&
             !u.includes('eunsol_family_sunset')
@@ -859,6 +925,7 @@ export function getLocalStories(): StoryItem[] {
           const fallbackCover = validUrls[0] || (
             typeof item.imageUrl === 'string' &&
             item.imageUrl.trim().length > 0 &&
+            !item.imageUrl.startsWith('idb:') &&
             !item.imageUrl.includes('eunsol_beach_laugh') &&
             !item.imageUrl.includes('eunsol_sandcastle') &&
             !item.imageUrl.includes('eunsol_family_sunset')
@@ -887,40 +954,141 @@ export function saveLocalStories(stories: StoryItem[]): void {
   saveAllStoriesToIndexedDB(stories).catch(() => {});
 
   try {
-    // 2. Prepare safe lightweight payload for localStorage (never store giant base64 in localStorage)
-    // Server URLs (/uploads/...) are short (~30 bytes) and kept as-is.
-    const lightweight = stories.map((s) => {
-      const urls = (s.imageUrls || []).map((u, idx) => {
-        if (typeof u === 'string' && (u.startsWith('data:') || u.length > 300)) {
-          return `idb:photo_${s.studentName}_${normalizeWeek(s.week)}_${idx}`;
-        }
-        return u;
-      });
-      const cover = typeof s.imageUrl === 'string' && (s.imageUrl.startsWith('data:') || s.imageUrl.length > 300)
-        ? (urls[0] || `idb:photo_${s.studentName}_${normalizeWeek(s.week)}_0`)
-        : s.imageUrl;
-
+    // 2. Filter out any invalid idb: pseudo strings from localStorage
+    const cleanStories = stories.map((s) => {
+      const urls = (s.imageUrls || []).filter(
+        (u) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
+      );
       return {
         ...s,
         imageUrls: urls,
-        imageUrl: cover
+        imageUrl: (s.imageUrl && !s.imageUrl.startsWith('idb:')) ? s.imageUrl : (urls[0] || '')
       };
     });
 
     try {
-      localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(lightweight));
+      localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(cleanStories));
     } catch (quotaErr) {
-      // If quota exceeded, clean legacy keys and try one more time
+      // If quota exceeded, clean legacy keys and try saving with lightweight non-base64 copy
       cleanupLegacyLocalStorage();
       try {
+        const lightweight = cleanStories.map((s) => {
+          const lightUrls = (s.imageUrls || []).map((u) => (typeof u === 'string' && u.startsWith('data:') ? '' : u)).filter(Boolean);
+          return {
+            ...s,
+            imageUrls: lightUrls,
+            imageUrl: (s.imageUrl && s.imageUrl.startsWith('data:')) ? (lightUrls[0] || '') : s.imageUrl
+          };
+        });
         localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(lightweight));
       } catch (retryErr) {
         console.warn('[Storage] localStorage quota reached: full state preserved safely in IndexedDB and server disk.', retryErr);
       }
     }
   } catch (e) {
-    console.warn('[Storage] localStorage save note (quota managed): full fidelity safely preserved in IndexedDB.', e);
+    console.warn('[Storage] localStorage save error:', e);
   }
+}
+
+/**
+ * Self-healing: Scans client localStorage and IndexedDB for legacy idb: references,
+ * recovers the original high-resolution photo from IndexedDB, uploads it to the server disk,
+ * and updates the story with permanent /uploads/... URLs across client and server.
+ */
+export async function healLegacyStories(): Promise<StoryItem[]> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_STORIES);
+    const localStories: StoryItem[] = raw ? JSON.parse(raw) : [];
+    let idbStories: StoryItem[] = [];
+    try {
+      idbStories = await getAllStoriesFromIndexedDB();
+    } catch {}
+
+    const allCandidateStories = [...localStories, ...idbStories];
+    const storiesWithIdb = allCandidateStories.filter((s) => {
+      if (!s || !s.studentName) return false;
+      const hasIdbUrl = (s.imageUrls || []).some((u) => typeof u === 'string' && u.startsWith('idb:'));
+      const hasIdbCover = typeof s.imageUrl === 'string' && s.imageUrl.startsWith('idb:');
+      return hasIdbUrl || hasIdbCover;
+    });
+
+    if (storiesWithIdb.length === 0) {
+      return getLocalStories();
+    }
+
+    console.log(`[Storage] Healing ${storiesWithIdb.length} stories with legacy idb: references...`);
+    let healedAny = false;
+
+    for (const story of storiesWithIdb) {
+      const currentUrls = Array.isArray(story.imageUrls) ? story.imageUrls : [];
+      const recoveredUrls: string[] = [];
+
+      for (let i = 0; i < currentUrls.length; i++) {
+        const u = currentUrls[i];
+        if (typeof u === 'string' && u.startsWith('idb:')) {
+          // Attempt recovery from IndexedDB
+          let realPhoto = await findPhotoForStudent(story.studentName, story.week, i);
+          if (realPhoto && !realPhoto.startsWith('idb:')) {
+            if (realPhoto.startsWith('data:')) {
+              try {
+                const upRes = await fetch('/api/upload-photo', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    imageBase64: realPhoto,
+                    name: `repaired_${story.studentName}_${i + 1}`
+                  })
+                });
+                if (upRes.ok) {
+                  const upData = await upRes.json();
+                  if (upData.url) realPhoto = upData.url;
+                }
+              } catch {}
+            }
+            recoveredUrls.push(realPhoto);
+            healedAny = true;
+          }
+        } else if (typeof u === 'string' && u.trim().length > 0) {
+          recoveredUrls.push(u);
+        }
+      }
+
+      story.imageUrls = recoveredUrls;
+      story.imageUrl = recoveredUrls[0] || '';
+    }
+
+    if (healedAny) {
+      const currentList = getLocalStories();
+      const updatedList = currentList.map((cur) => {
+        const healedMatch = storiesWithIdb.find(
+          (h) => h.id === cur.id || (h.studentName === cur.studentName && h.week === cur.week)
+        );
+        if (healedMatch && healedMatch.imageUrls && healedMatch.imageUrls.length > 0) {
+          return {
+            ...cur,
+            imageUrls: healedMatch.imageUrls,
+            imageUrl: healedMatch.imageUrl || healedMatch.imageUrls[0]
+          };
+        }
+        return cur;
+      });
+
+      saveLocalStories(updatedList);
+      saveAllStoriesToIndexedDB(updatedList).catch(() => {});
+
+      // Sync to server disk
+      fetch('/api/stories/bulk-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stories: updatedList })
+      }).catch(() => {});
+
+      return updatedList;
+    }
+  } catch (err) {
+    console.warn('[Storage] healLegacyStories error:', err);
+  }
+  return getLocalStories();
 }
 
 export function getGasConfig(): GasConfig {
