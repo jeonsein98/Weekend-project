@@ -499,14 +499,66 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
     setTimeout(() => setShowHeartAnim(false), 800);
   };
 
-  // Handle Keyboard Navigation
+  // Fullscreen Handlers (Fullscreen API with cross-browser and iframe fallback)
+  const enterFullscreen = async () => {
+    try {
+      const el = document.documentElement;
+      if (el.requestFullscreen) {
+        await el.requestFullscreen();
+      } else if ((el as any).webkitRequestFullscreen) {
+        await (el as any).webkitRequestFullscreen();
+      } else if ((el as any).mozRequestFullScreen) {
+        await (el as any).mozRequestFullScreen();
+      } else if ((el as any).msRequestFullscreen) {
+        await (el as any).msRequestFullscreen();
+      }
+    } catch (err) {
+      console.warn('Fullscreen API unavailable or restricted:', err);
+    }
+    setIsFullscreen(true);
+  };
+
+  const exitFullscreen = async () => {
+    try {
+      if (document.fullscreenElement || (document as any).webkitFullscreenElement || (document as any).mozFullScreenElement || (document as any).msFullscreenElement) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        } else if ((document as any).mozCancelFullScreen) {
+          await (document as any).mozCancelFullScreen();
+        } else if ((document as any).msExitFullscreen) {
+          await (document as any).msExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.warn('Exit fullscreen error:', err);
+    }
+    setIsFullscreen(false);
+  };
+
+  // Toggle Fullscreen
+  const toggleFullscreen = () => {
+    if (isFullscreen || !!document.fullscreenElement) {
+      exitFullscreen();
+    } else {
+      enterFullscreen();
+    }
+  };
+
+  // Handle Keyboard Navigation & Fullscreen Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
 
-      if (e.key === 'ArrowRight' || e.key === ' ') {
+      if (e.key === 'Escape') {
+        if (isFullscreen) {
+          e.preventDefault();
+          exitFullscreen();
+        }
+      } else if (e.key === 'ArrowRight' || e.key === ' ') {
         e.preventDefault();
         goToNext();
       } else if (e.key === 'ArrowLeft') {
@@ -520,7 +572,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [goToNext, goToPrev]);
+  }, [goToNext, goToPrev, isFullscreen]);
 
   // Handle Slideshow Autoplay Timer
   useEffect(() => {
@@ -531,32 +583,22 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
     return () => clearInterval(timer);
   }, [isPlaying, autoPlaySpeed, goToNext, totalSlides]);
 
-  // Toggle Fullscreen & Auto Scroll
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen().catch(err => console.error(err));
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen().catch(err => console.error(err));
-      setIsFullscreen(false);
-    }
-    setTimeout(() => {
-      slideCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
-  };
-
+  // Fullscreen change listener across browsers
   useEffect(() => {
     const onFullscreenChange = () => {
-      const isFS = !!document.fullscreenElement;
+      const isFS = !!(document.fullscreenElement || (document as any).webkitFullscreenElement || (document as any).mozFullScreenElement || (document as any).msFullscreenElement);
       setIsFullscreen(isFS);
-      if (isFS) {
-        setTimeout(() => {
-          slideCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 150);
-      }
     };
     document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    document.addEventListener('mozfullscreenchange', onFullscreenChange);
+    document.addEventListener('MSFullscreenChange', onFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', onFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', onFullscreenChange);
+    };
   }, []);
 
   // Auto Scroll down to slide card on mount
@@ -645,6 +687,13 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
   // Calculate total reactions count
   const totalReactions = (Object.values(currentStory.reactions || {}) as (number | string)[]).reduce<number>((acc, curr) => acc + (Number(curr) || 0), 0);
 
+  // Extract all photos for current story
+  const rawUrls = Array.isArray(currentStory.imageUrls)
+    ? currentStory.imageUrls
+    : (currentStory.imageUrl ? [currentStory.imageUrl] : []);
+  const validUrls = rawUrls.filter((u: any) => typeof u === 'string' && u.trim().length > 0);
+  const photos = validUrls.length > 0 ? validUrls : [''];
+
   return (
     <div
       ref={containerRef}
@@ -731,8 +780,8 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
           <button
             id="ppt-btn-fullscreen"
             onClick={toggleFullscreen}
-            className="p-2 rounded-full bg-white border border-[#DBDBDB] text-[#262626] hover:bg-[#EFEFEF] transition-all"
-            title="전체 화면 (F키)"
+            className="p-2 sm:p-2.5 rounded-full bg-blue-500 hover:bg-blue-600 text-white shadow-md hover:shadow-lg transition-all active:scale-95 flex items-center justify-center ring-2 ring-blue-300"
+            title="전체 화면 슬라이드쇼 (PPT 모드, F11/클릭)"
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           </button>
@@ -801,6 +850,17 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  id="card-fullscreen-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    enterFullscreen();
+                  }}
+                  className="p-2 rounded-full bg-blue-500 hover:bg-blue-600 text-white shadow-sm hover:shadow transition-all active:scale-95 ring-2 ring-blue-300 flex items-center justify-center"
+                  title="사진 전체화면 크게 보기 (PPT 슬라이드쇼, F11)"
+                >
+                  <Maximize2 className="w-4 h-4" />
+                </button>
                 <button
                   onClick={() => onUpdateReaction(currentStory.id, '❤️')}
                   className="p-2.5 rounded-full hover:bg-gray-100 text-[#262626] transition-colors"
@@ -1058,12 +1118,24 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                     ) : (
                       /* Final Step: ALL Photos Together Grid View - Full Screen Maximize */
                       <div className="w-full bg-black flex flex-col">
-                        <div className="w-full bg-black/90 px-4 py-2 flex items-center justify-between border-b border-white/10 text-white">
+                        <div className="w-full bg-black/90 px-4 py-2.5 flex items-center justify-between border-b border-white/10 text-white">
                           <span className="text-xs sm:text-sm font-black text-pink-400 flex items-center gap-2">
                             <Sparkles className="w-4 h-4 fill-pink-400" />
                             <span>사진 {photos.length}장 모아보기 (TV 대형 화면)</span>
                           </span>
-                          <span className="text-xs text-white/70 font-bold">사진 클릭 시 원본 크게보기</span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                enterFullscreen();
+                              }}
+                              className="px-3.5 py-1.5 rounded-full bg-blue-500 hover:bg-blue-600 text-white text-xs font-black flex items-center gap-1.5 shadow-md transition-all active:scale-95 ring-2 ring-blue-300 cursor-pointer"
+                              title="전체 화면 슬라이드쇼 (PPT 모드, F11)"
+                            >
+                              <Maximize2 className="w-3.5 h-3.5" />
+                              <span>전체화면 확장 (PPT)</span>
+                            </button>
+                          </div>
                         </div>
 
                         <div className={`grid gap-2 p-1 bg-black w-full ${photos.length === 2 ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 sm:grid-cols-3'}`}>
@@ -1348,6 +1420,144 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                 }}
                 className="max-w-full max-h-full object-contain rounded-2xl pointer-events-none select-none"
               />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* PPT Fullscreen SlideShow View Overlay */}
+      <AnimatePresence>
+        {isFullscreen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-[99999] bg-black text-white w-screen h-screen flex flex-col justify-between overflow-hidden select-none cursor-pointer"
+            onClick={exitFullscreen}
+          >
+            {/* Top Bar with Minimal Info and Exit Button */}
+            <div
+              className="w-full px-6 py-4 flex items-center justify-between z-30 bg-gradient-to-b from-black/90 via-black/50 to-transparent pointer-events-none"
+            >
+              <div className="flex items-center gap-3">
+                <span className="bg-blue-600/90 text-white font-black px-3.5 py-1.5 rounded-full text-xs sm:text-sm shadow-md flex items-center gap-1.5 border border-blue-400/30">
+                  <Sparkles className="w-4 h-4 fill-white" />
+                  {currentStory.studentName} 어린이 ({studentClass})
+                </span>
+                <span className="text-xs sm:text-sm font-bold text-white/70">
+                  {currentStory.week} 주말 이야기 • {photos.length}장 사진 모아보기
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3 pointer-events-auto">
+                <span className="text-xs text-white/50 hidden sm:inline-block">
+                  화면 클릭 또는 ESC로 종료
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    exitFullscreen();
+                  }}
+                  className="px-3.5 py-1.5 rounded-full bg-white/20 hover:bg-rose-600 text-white text-xs sm:text-sm font-extrabold flex items-center gap-1.5 border border-white/20 shadow-lg transition-all active:scale-95 cursor-pointer"
+                  title="전체 화면 종료 (ESC)"
+                >
+                  <Minimize2 className="w-4 h-4" />
+                  <span>화면 복귀 (ESC)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Center Photos Container - PPT Slideshow Filling Screen */}
+            <div className="relative flex-1 w-full h-full flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-hidden">
+              {/* Previous Student Arrow */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goToPrev();
+                }}
+                className="absolute left-3 sm:left-6 z-40 p-3 sm:p-4 rounded-full bg-black/60 hover:bg-black/90 text-white/80 hover:text-white border border-white/20 backdrop-blur-md transition-all active:scale-90 shadow-2xl cursor-pointer"
+                title="이전 원아 슬라이드 (← 키)"
+              >
+                <ChevronLeft className="w-6 h-6 sm:w-8 sm:h-8" />
+              </button>
+
+              {/* Next Student Arrow */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goToNext();
+                }}
+                className="absolute right-3 sm:right-6 z-40 p-3 sm:p-4 rounded-full bg-black/60 hover:bg-black/90 text-white/80 hover:text-white border border-white/20 backdrop-blur-md transition-all active:scale-90 shadow-2xl cursor-pointer"
+                title="다음 원아 슬라이드 (→ 키)"
+              >
+                <ChevronRight className="w-6 h-6 sm:w-8 sm:h-8" />
+              </button>
+
+              {/* Photos Grid: 1, 2, or 3 Photos */}
+              <AnimatePresence custom={direction} mode="wait">
+                <motion.div
+                  key={currentStory.id}
+                  custom={direction}
+                  variants={slideVariants}
+                  initial="enter"
+                  animate="center"
+                  exit="exit"
+                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                  className={`w-full h-full max-w-[98vw] max-h-[88vh] mx-auto grid gap-3 sm:gap-4 md:gap-5 items-center justify-center ${
+                    photos.length === 1
+                      ? 'grid-cols-1'
+                      : photos.length === 2
+                      ? 'grid-cols-1 sm:grid-cols-2'
+                      : photos.length === 3
+                      ? 'grid-cols-1 sm:grid-cols-3'
+                      : 'grid-cols-2 sm:grid-cols-4'
+                  }`}
+                >
+                  {photos.map((imgUrl, imgIdx) => {
+                    const captionText = currentStory.imageCaptions?.[imgIdx];
+                    return (
+                      <div
+                        key={imgIdx}
+                        className="relative w-full h-[82vh] max-h-[85vh] rounded-2xl overflow-hidden bg-black/90 border border-white/10 flex flex-col justify-center items-center shadow-2xl group"
+                      >
+                        <SlidePhoto
+                          src={imgUrl}
+                          alt={`${currentStory.studentName} - 사진 ${imgIdx + 1}`}
+                          studentName={currentStory.studentName}
+                          fallbackIndex={imgIdx}
+                          fitMode="contain"
+                          showBackdropBlur={true}
+                          className="w-full h-full max-h-full max-w-full object-contain pointer-events-none select-none drop-shadow-2xl"
+                        />
+
+                        {/* Badge: 사진 #1, #2, #3 */}
+                        <span className="absolute top-3 left-3 bg-black/80 backdrop-blur-md text-white text-xs sm:text-sm font-black px-3.5 py-1.5 rounded-full border border-white/20 shadow-md z-20 pointer-events-none">
+                          사진 #{imgIdx + 1}
+                        </span>
+
+                        {/* Caption Overlay */}
+                        {captionText && (
+                          <div className="absolute bottom-0 inset-x-0 p-3 sm:p-4 bg-gradient-to-t from-black/95 via-black/80 to-transparent text-white z-20 pointer-events-none">
+                            <p className="text-xs sm:text-sm font-black text-pink-300 mb-0.5">
+                              💬 사진 #{imgIdx + 1}
+                            </p>
+                            <p className="text-xs sm:text-base font-bold text-white leading-relaxed line-clamp-3 drop-shadow-md">
+                              {captionText}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </motion.div>
+              </AnimatePresence>
+            </div>
+
+            {/* Bottom Subtle Bar */}
+            <div className="w-full py-2.5 px-6 flex items-center justify-between text-xs text-white/50 bg-gradient-to-t from-black/90 to-transparent z-30 pointer-events-none">
+              <span>키보드 ← / → 키로 이전/다음 원아 넘김 가능</span>
+              <span className="text-pink-300 font-bold">화면 어디든 클릭하면 이전 화면으로 복귀합니다</span>
             </div>
           </motion.div>
         )}

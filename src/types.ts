@@ -58,10 +58,7 @@ export const WEEKS_LIST = [
   "1/23~1/24",
   "1/30~1/31",
   "2월 1주차(방학지낸이야기)",
-  "2/6~2/7",
-  "2/13~2/14",
-  "2/20~2/21",
-  "2/27~2/28"
+  "2/6~2/7"
 ];
 
 /**
@@ -74,7 +71,7 @@ export function isWeekMatch(weekA?: string, weekB?: string): boolean {
 }
 
 /**
- * 2026학년도 주말 일정 및 방학 주차를 기준으로 오늘 날짜에 해당하는 주차를 반환
+ * 2026학년도 주말 일정 및 방학 주차를 기준으로 오늘 날짜에 해당하는 주차를 반환 (2월 중순 이전까지)
  */
 export function getCurrentWeekString(now = new Date()): string {
   const month = now.getMonth() + 1; // 1 ~ 12
@@ -86,6 +83,11 @@ export function getCurrentWeekString(now = new Date()): string {
   }
   if (month === 9 && day < 5) {
     return "9월 1주차(방학지낸이야기)";
+  }
+
+  // 2월은 2/6~2/7까지 진행 후 종료
+  if (month === 2) {
+    return "2/6~2/7";
   }
 
   // 2026년도 주말 날짜 매핑표 (토요일~일요일 주말 기준)
@@ -113,10 +115,7 @@ export function getCurrentWeekString(now = new Date()): string {
     { label: "1/16~1/17", m: 1, startD: 13, endD: 19 },
     { label: "1/23~1/24", m: 1, startD: 20, endD: 26 },
     { label: "1/30~1/31", m: 1, startD: 27, endD: 31 },
-    { label: "2/6~2/7", m: 2, startD: 1, endD: 9 },
-    { label: "2/13~2/14", m: 2, startD: 10, endD: 16 },
-    { label: "2/20~2/21", m: 2, startD: 17, endD: 23 },
-    { label: "2/27~2/28", m: 2, startD: 24, endD: 29 },
+    { label: "2/6~2/7", m: 2, startD: 1, endD: 29 },
   ];
 
   const matched = weekendDates.find(w => w.m === month && day >= w.startD && day <= w.endD);
