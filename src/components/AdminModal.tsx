@@ -118,6 +118,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [isProxyUploading, setIsProxyUploading] = useState(false);
   const [isProxySubmitting, setIsProxySubmitting] = useState(false);
   const proxyFileInputRef = useRef<HTMLInputElement>(null);
+  const proxyPreviewMapRef = useRef<Map<string, string>>(new Map());
 
   // New Student Form State
   const [newName, setNewName] = useState('');
@@ -456,54 +457,79 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   // Handle Proxy files add
   const handleProxyFilesAdd = async (files: FileList | File[]) => {
     const fileArr = Array.from(files);
-    if (proxyImages.length + fileArr.length > 3) {
-      onShowToast('사진은 최대 3장까지 첨부 가능합니다.', 'error');
+    if (fileArr.length === 0) return;
+
+    const currentCount = proxyImages.length;
+    const remainingSlots = 3 - currentCount;
+    if (remainingSlots <= 0) {
+      onShowToast('사진은 최대 3장까지만 첨부 가능합니다.', 'error');
+      return;
     }
-    const remainingSlots = 3 - proxyImages.length;
+
     const toProcess = fileArr.slice(0, remainingSlots);
+    if (fileArr.length > remainingSlots) {
+      onShowToast(`최대 3장까지만 등록 가능하여 ${remainingSlots}장만 추가됩니다.`, 'info');
+    }
 
     setIsProxyUploading(true);
-    const newProxyUrls: string[] = [];
+    let addedCount = 0;
+
     try {
-      for (const f of toProcess) {
+      for (let i = 0; i < toProcess.length; i++) {
+        const f = toProcess[i];
         const compressed = await compressImageFile(f);
-        let finalUrl = compressed;
+        if (!compressed) continue;
+
+        // 1. Immediately append to state with functional update (prev => [...prev, newImage])
+        // Previous photos are safely preserved and user gets instant visible feedback!
+        setProxyImages((prev) => {
+          if (prev.length >= 3) return prev;
+          return [...prev, compressed];
+        });
+        setProxyCaptions((prev) => {
+          if (prev.length >= 3) return prev;
+          return [...prev, ''];
+        });
+        addedCount++;
+
+        // 2. Safe indexing for IndexedDB archive with currentCount offset
+        const photoIdx = currentCount + i;
+        const photoKey = `${proxyStudentName || '원아'}_${proxyWeek}_${photoIdx}`;
+        savePhotoToIndexedDB(photoKey, compressed, {
+          studentName: proxyStudentName || '원아',
+          week: proxyWeek,
+          photoIndex: photoIdx
+        }).catch(() => {});
+
+        // 3. Upload to server to get permanent disk URL
         try {
-          const upRes = await fetch('/api/upload', {
+          const upRes = await fetch('/api/upload-photo', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              studentName: proxyStudentName || '원아',
-              image: compressed,
-              filename: f.name
+              imageBase64: compressed,
+              name: `proxy_${proxyStudentName || 'child'}_${Date.now()}_${i}`
             })
           });
           if (upRes.ok) {
             const upData = await upRes.json();
-            if (upData.url) finalUrl = upData.url;
+            if (upData.url) {
+              const serverUrl = upData.url;
+              proxyPreviewMapRef.current.set(serverUrl, compressed);
+
+              // Seamlessly swap preview with permanent URL
+              setProxyImages((prev) =>
+                prev.map((item) => (item === compressed ? serverUrl : item))
+              );
+            }
           }
         } catch (uploadErr) {
-          // fallback to base64
+          console.warn('Background upload fallback:', uploadErr);
         }
-
-        // Archive into IndexedDB dedicated photos store
-        const photoKey = `${proxyStudentName || '원아'}_${proxyWeek}_${newProxyUrls.length}`;
-        savePhotoToIndexedDB(photoKey, compressed, {
-          studentName: proxyStudentName || '원아',
-          week: proxyWeek,
-          photoIndex: newProxyUrls.length
-        }).catch(() => {});
-
-        newProxyUrls.push(finalUrl);
       }
 
-      if (newProxyUrls.length > 0) {
-        setProxyImages((prev) => [...prev, ...newProxyUrls].slice(0, 3));
-        setProxyCaptions((prev) => {
-          const newCaps = new Array(newProxyUrls.length).fill('');
-          return [...prev, ...newCaps].slice(0, 3);
-        });
-        onShowToast(`${newProxyUrls.length}장의 사진이 선택 순서대로 추가되었습니다.`, 'info');
+      if (addedCount > 0) {
+        onShowToast(`${addedCount}장의 사진이 안전하게 추가되었습니다.`, 'info');
       }
     } finally {
       setIsProxyUploading(false);
@@ -1515,10 +1541,31 @@ ${name} 학부모님, 사진을 첨부하신 후 화면 맨 아래의 [Instagram
                   {proxyImages.length > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
                       {proxyImages.map((pUrl, pIdx) => (
-                        <div key={pIdx} className="p-2 border border-[#E8E4D9] rounded-xl bg-white space-y-1.5">
+                        <div key={`proxy-img-${pIdx}-${pUrl.slice(0, 32)}`} className="p-2 border border-[#E8E4D9] rounded-xl bg-white space-y-1.5">
                           <div className="relative aspect-[4/3] rounded-lg overflow-hidden bg-black/90 flex items-center justify-center">
-                            <img src={pUrl} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover blur-md opacity-35 scale-110 pointer-events-none" />
-                            <img src={pUrl} alt={`사진 ${pIdx + 1}`} className="relative z-10 max-h-full max-w-full object-contain pointer-events-none" />
+                            <img
+                              src={pUrl}
+                              alt=""
+                              aria-hidden="true"
+                              onError={(e) => {
+                                const fallback = proxyPreviewMapRef.current.get(pUrl);
+                                if (fallback && e.currentTarget.src !== fallback) {
+                                  e.currentTarget.src = fallback;
+                                }
+                              }}
+                              className="absolute inset-0 w-full h-full object-cover blur-md opacity-35 scale-110 pointer-events-none"
+                            />
+                            <img
+                              src={pUrl}
+                              alt={`사진 ${pIdx + 1}`}
+                              onError={(e) => {
+                                const fallback = proxyPreviewMapRef.current.get(pUrl);
+                                if (fallback && e.currentTarget.src !== fallback) {
+                                  e.currentTarget.src = fallback;
+                                }
+                              }}
+                              className="relative z-10 max-h-full max-w-full object-contain pointer-events-none"
+                            />
                             <span className="absolute top-1 left-1 z-20 bg-black/70 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
                               #{pIdx + 1}
                             </span>

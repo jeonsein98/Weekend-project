@@ -143,10 +143,11 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
     if (activeStudentName && !editingStoryId) {
       getDraftFromIndexedDB(activeStudentName).then((draft) => {
         if (draft && draft.imageUrls && draft.imageUrls.length > 0) {
-          setImageUrls(draft.imageUrls);
-          setImageCaptions(draft.imageCaptions || draft.imageUrls.map(() => ''));
-          if (draft.week) setWeek(draft.week);
-          if (draft.aiComment) setAiComment(draft.aiComment);
+          // Only restore into form if user hasn't already uploaded photos in current session
+          setImageUrls((prev) => (prev.length === 0 ? draft.imageUrls : prev));
+          setImageCaptions((prev) => (prev.length === 0 ? (draft.imageCaptions || draft.imageUrls.map(() => '')) : prev));
+          if (draft.week) setWeek((prev) => prev || draft.week);
+          if (draft.aiComment) setAiComment((prev) => prev || draft.aiComment);
           setIsFormOpen(true);
           onShowToast(`${activeStudentName} 어린이의 이전에 작성 중이던 사진과 내용이 안전하게 복원되었습니다!`, 'info');
         }
@@ -201,6 +202,8 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
   };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Persistent preview fallback cache so preview images never flicker or break while waiting for server
+  const previewMapRef = useRef<Map<string, string>>(new Map());
 
   // Compress image helper to ensure mobile photo uploads work reliably & lightweight
   const compressMobilePhoto = (file: File): Promise<string> => {
@@ -273,60 +276,85 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
     });
   };
 
-  // Handle Image Upload (Max 3) - Strictly preserving selection order
+  // Handle Image Upload (Max 3) - Safely accumulates images without overwriting existing ones
   const handleFilesAdd = async (files: FileList | File[]) => {
     const fileArray = Array.from(files);
-    if (imageUrls.length + fileArray.length > 3) {
+    if (fileArray.length === 0) return;
+
+    // Check available capacity dynamically
+    const currentCount = imageUrls.length;
+    const availableSlots = 3 - currentCount;
+    if (availableSlots <= 0) {
       onShowToast('사진은 한 이야기당 최대 3장까지만 올릴 수 있습니다.', 'error');
       return;
     }
 
-    setIsUploadingPhoto(true);
-    const newProcessedUrls: string[] = [];
-    try {
-      for (let i = 0; i < fileArray.length; i++) {
-        if (imageUrls.length + newProcessedUrls.length >= 3) break;
-        const file = fileArray[i];
-        const dataUrl = await compressMobilePhoto(file);
-        if (dataUrl) {
-          const photoIdx = imageUrls.length + newProcessedUrls.length;
-          const photoKey = `${activeStudentName || 'child'}_${week}_${photoIdx}`;
-          savePhotoToIndexedDB(photoKey, dataUrl, {
-            studentName: activeStudentName || '',
-            week,
-            photoIndex: photoIdx
-          }).catch(() => {});
+    const toProcess = fileArray.slice(0, availableSlots);
+    if (fileArray.length > availableSlots) {
+      onShowToast(`최대 3장까지 등록 가능하여, ${availableSlots}장의 사진만 추가됩니다.`, 'info');
+    }
 
-          let finalUrl = dataUrl;
-          try {
-            const uploadRes = await fetch('/api/upload-photo', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                imageBase64: dataUrl,
-                name: `photo_${activeStudentName || 'child'}_${Date.now()}_${i}`
-              })
-            });
-            if (uploadRes.ok) {
-              const uploadData = await uploadRes.json();
-              if (uploadData.url) {
-                finalUrl = uploadData.url;
-              }
+    setIsUploadingPhoto(true);
+    let addedCount = 0;
+
+    try {
+      for (let i = 0; i < toProcess.length; i++) {
+        const file = toProcess[i];
+        const dataUrl = await compressMobilePhoto(file);
+        if (!dataUrl) continue;
+
+        // 1. Instantly append to state using functional updater (setImages(prev => [...prev, newImage]))
+        // This ensures existing images are NEVER overwritten and user gets instant visible preview!
+        setImageUrls((prev) => {
+          if (prev.length >= 3) return prev;
+          return [...prev, dataUrl];
+        });
+        setImageCaptions((prev) => {
+          if (prev.length >= 3) return prev;
+          return [...prev, ''];
+        });
+        addedCount++;
+
+        // 2. Safe index calculation for IndexedDB archive so previous photos at 0, 1 are not overwritten
+        const photoIdx = currentCount + i;
+        const photoKey = `${activeStudentName || 'child'}_${week}_${photoIdx}`;
+        savePhotoToIndexedDB(photoKey, dataUrl, {
+          studentName: activeStudentName || '',
+          week,
+          photoIndex: photoIdx
+        }).catch(() => {});
+
+        // 3. Concurrently upload to server to get permanent disk URL
+        try {
+          const uploadRes = await fetch('/api/upload-photo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              imageBase64: dataUrl,
+              name: `photo_${activeStudentName || 'child'}_${Date.now()}_${i}`
+            })
+          });
+          if (uploadRes.ok) {
+            const uploadData = await uploadRes.json();
+            if (uploadData.url) {
+              const serverUrl = uploadData.url;
+              // Cache local dataUrl as fallback
+              previewMapRef.current.set(serverUrl, dataUrl);
+
+              // Seamlessly swap temporary preview dataUrl with permanent server URL
+              setImageUrls((prev) =>
+                prev.map((item) => (item === dataUrl ? serverUrl : item))
+              );
             }
-          } catch (uploadErr) {
-            console.warn('Direct upload fallback:', uploadErr);
           }
-          newProcessedUrls.push(finalUrl);
+        } catch (uploadErr) {
+          console.warn('Background photo upload warning:', uploadErr);
+          // Temporary dataUrl remains active in state safely
         }
       }
 
-      if (newProcessedUrls.length > 0) {
-        setImageUrls((prev) => [...prev, ...newProcessedUrls].slice(0, 3));
-        setImageCaptions((prev) => {
-          const newCaps = new Array(newProcessedUrls.length).fill('');
-          return [...prev, ...newCaps].slice(0, 3);
-        });
-        onShowToast(`${newProcessedUrls.length}장의 사진이 선택하신 순서대로 첨부되었습니다!`, 'success');
+      if (addedCount > 0) {
+        onShowToast(`${addedCount}장의 사진이 안전하게 추가되었습니다!`, 'success');
       }
     } finally {
       setIsUploadingPhoto(false);
@@ -943,7 +971,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 pt-1">
                   {imageUrls.map((pUrl, idx) => (
                     <div
-                      key={idx}
+                      key={`photo-card-${idx}-${pUrl.slice(0, 32)}`}
                       className="p-3 rounded-2xl border border-[#DBDBDB] bg-white space-y-3 shadow-2xs flex flex-col justify-between"
                     >
                       {/* Photo Header & Image Aspect Box */}
@@ -987,8 +1015,29 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
                         {/* Image Frame */}
                         <div className="relative aspect-[4/3] w-full rounded-xl overflow-hidden bg-black border border-[#DBDBDB] flex items-center justify-center">
-                          <img src={pUrl} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover blur-xl opacity-35 scale-110 pointer-events-none" />
-                          <img src={pUrl} alt={`첨부 사진 ${idx + 1}`} className="relative z-10 max-h-full max-w-full object-contain pointer-events-none" />
+                          <img
+                            src={pUrl}
+                            alt=""
+                            aria-hidden="true"
+                            onError={(e) => {
+                              const fallback = previewMapRef.current.get(pUrl);
+                              if (fallback && e.currentTarget.src !== fallback) {
+                                e.currentTarget.src = fallback;
+                              }
+                            }}
+                            className="absolute inset-0 w-full h-full object-cover blur-xl opacity-35 scale-110 pointer-events-none"
+                          />
+                          <img
+                            src={pUrl}
+                            alt={`첨부 사진 ${idx + 1}`}
+                            onError={(e) => {
+                              const fallback = previewMapRef.current.get(pUrl);
+                              if (fallback && e.currentTarget.src !== fallback) {
+                                e.currentTarget.src = fallback;
+                              }
+                            }}
+                            className="relative z-10 max-h-full max-w-full object-contain pointer-events-none"
+                          />
                           <span className="absolute top-2 left-2 z-20 bg-black/75 backdrop-blur-xs text-white font-extrabold text-[10px] px-2 py-0.5 rounded-full border border-white/20">
                             #{idx + 1}
                           </span>
