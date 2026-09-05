@@ -35,13 +35,36 @@ function doGet(e) {
     for (var i = 1; i < rows.length; i++) {
       var row = rows[i];
       if (!row[0]) continue;
+
+      var rawImages = row[5] || '';
+      var parsedImages = [];
+      try {
+        if (typeof rawImages === 'string' && rawImages.startsWith('[')) {
+          parsedImages = JSON.parse(rawImages);
+        } else if (rawImages) {
+          parsedImages = [rawImages];
+        }
+      } catch(err) {
+        parsedImages = rawImages ? [rawImages] : [];
+      }
+
+      var rawCaptions = row[9] || '';
+      var parsedCaptions = [];
+      try {
+        if (typeof rawCaptions === 'string' && rawCaptions.startsWith('[')) {
+          parsedCaptions = JSON.parse(rawCaptions);
+        }
+      } catch(err) {}
+
       stories.push({
         id: row[0] || ('gas-' + i),
         week: row[1] || '',
         studentName: row[2] || '',
         title: row[3] || '',
         content: row[4] || '',
-        imageUrl: row[5] || '',
+        imageUrls: Array.isArray(parsedImages) ? parsedImages : [],
+        imageUrl: (Array.isArray(parsedImages) && parsedImages[0]) || (typeof row[5] === 'string' ? row[5] : ''),
+        imageCaptions: Array.isArray(parsedCaptions) ? parsedCaptions : [],
         aiComment: row[6] || '',
         createdAt: row[7] || new Date().toISOString(),
         reactions: JSON.parse(row[8] || '{"❤️":0,"👏":0,"⭐":0,"😊":0}')
@@ -58,23 +81,27 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
     
-    // 헤더 없으면 생성
+    // 헤더 없으면 생성 (최대 3장 사진 및 캡션 포함)
     if (sheet.getLastRow() === 0) {
-      sheet.appendRow(["ID", "주차", "학생이름", "제목", "내용", "이미지URL", "AI소감", "등록일시", "리액션"]);
+      sheet.appendRow(["ID", "주차", "학생이름", "제목", "내용", "사진URL목록(최대3장)", "AI소감", "등록일시", "리액션", "사진설명코멘트"]);
     }
     
     if (data.action === 'save' && data.story) {
       var s = data.story;
+      var imgs = s.imageUrls || (s.imageUrl ? [s.imageUrl] : []);
+      var captions = s.imageCaptions || [];
+
       sheet.appendRow([
         s.id,
         s.week,
         s.studentName,
         s.title,
         s.content,
-        s.imageUrl || '',
+        JSON.stringify(imgs),
         s.aiComment || '',
         s.createdAt || new Date().toISOString(),
-        JSON.stringify(s.reactions || {})
+        JSON.stringify(s.reactions || {}),
+        JSON.stringify(captions)
       ]);
       return ContentService.createTextOutput(JSON.stringify({ status: "success" }))
         .setMimeType(ContentService.MimeType.JSON);

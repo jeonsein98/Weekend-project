@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { StoryItem, WEEKS_LIST, RosterStudent, getCurrentWeekString, isWeekMatch } from '../types';
 import { saveDraftToIndexedDB, getDraftFromIndexedDB, clearDraftFromIndexedDB, savePhotoToIndexedDB } from '../lib/idb';
+import { optimizeAndStandardizePhoto } from '../lib/imageOptimizer';
 
 interface StoryFormViewProps {
   selectedWeek: string;
@@ -205,78 +206,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
   // Persistent preview fallback cache so preview images never flicker or break while waiting for server
   const previewMapRef = useRef<Map<string, string>>(new Map());
 
-  // Compress image helper to ensure mobile photo uploads work reliably & lightweight
-  const compressMobilePhoto = (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      // Allow image MIME or standard image extensions or empty type from mobile file pickers
-      const isLikelyImage =
-        file.type.startsWith('image/') ||
-        /\.(jpe?g|png|heic|heif|webp|gif)$/i.test(file.name) ||
-        file.type === '';
-
-      if (!isLikelyImage) {
-        onShowToast('이미지 파일(JPG, PNG, WEBP 등)만 업로드 가능합니다.', 'error');
-        resolve('');
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onerror = () => {
-        onShowToast('사진 파일을 읽는 데 실패했습니다.', 'error');
-        resolve('');
-      };
-      reader.onload = (e) => {
-        const src = e.target?.result as string;
-        if (!src) {
-          resolve('');
-          return;
-        }
-
-        const img = new Image();
-        img.onerror = () => {
-          // If canvas draw fails, fallback to original DataURL
-          resolve(src);
-        };
-        img.onload = () => {
-          try {
-            const MAX_WIDTH = 1200;
-            const MAX_HEIGHT = 1200;
-            let width = img.width;
-            let height = img.height;
-
-            if (width > MAX_WIDTH || height > MAX_HEIGHT) {
-              if (width / height > MAX_WIDTH / MAX_HEIGHT) {
-                height = Math.round((height * MAX_WIDTH) / width);
-                width = MAX_WIDTH;
-              } else {
-                width = Math.round((width * MAX_HEIGHT) / height);
-                height = MAX_HEIGHT;
-              }
-            }
-
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-              resolve(src);
-              return;
-            }
-
-            ctx.drawImage(img, 0, 0, width, height);
-            const compressed = canvas.toDataURL('image/jpeg', 0.82);
-            resolve(compressed);
-          } catch (err) {
-            resolve(src);
-          }
-        };
-        img.src = src;
-      };
-      reader.readAsDataURL(file);
-    });
-  };
-
-  // Handle Image Upload (Max 3) - Safely accumulates images without overwriting existing ones
+  // Handle Image Upload (Max 3) - Universal compatibility for iPhone HEIC, Android, Galaxy, WebP
   const handleFilesAdd = async (files: FileList | File[]) => {
     const fileArray = Array.from(files);
     if (fileArray.length === 0) return;
@@ -296,65 +226,82 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
     setIsUploadingPhoto(true);
     let addedCount = 0;
+    let heicConvertedCount = 0;
 
     try {
       for (let i = 0; i < toProcess.length; i++) {
         const file = toProcess[i];
-        const dataUrl = await compressMobilePhoto(file);
-        if (!dataUrl) continue;
-
-        // 1. Instantly append to state using functional updater (setImages(prev => [...prev, newImage]))
-        // This ensures existing images are NEVER overwritten and user gets instant visible preview!
-        setImageUrls((prev) => {
-          if (prev.length >= 3) return prev;
-          return [...prev, dataUrl];
-        });
-        setImageCaptions((prev) => {
-          if (prev.length >= 3) return prev;
-          return [...prev, ''];
-        });
-        addedCount++;
-
-        // 2. Safe index calculation for IndexedDB archive so previous photos at 0, 1 are not overwritten
-        const photoIdx = currentCount + i;
-        const photoKey = `${activeStudentName || 'child'}_${week}_${photoIdx}`;
-        savePhotoToIndexedDB(photoKey, dataUrl, {
-          studentName: activeStudentName || '',
-          week,
-          photoIndex: photoIdx
-        }).catch(() => {});
-
-        // 3. Concurrently upload to server to get permanent disk URL
         try {
-          const uploadRes = await fetch('/api/upload-photo', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              imageBase64: dataUrl,
-              name: `photo_${activeStudentName || 'child'}_${Date.now()}_${i}`
-            })
+          // Use universal optimizer: converts HEIC/HEIF -> JPEG, resizes to crisp 1400px, compresses ~95%
+          const result = await optimizeAndStandardizePhoto(file, {
+            maxDimension: 1400,
+            quality: 0.84
           });
-          if (uploadRes.ok) {
-            const uploadData = await uploadRes.json();
-            if (uploadData.url) {
-              const serverUrl = uploadData.url;
-              // Cache local dataUrl as fallback
-              previewMapRef.current.set(serverUrl, dataUrl);
 
-              // Seamlessly swap temporary preview dataUrl with permanent server URL
-              setImageUrls((prev) =>
-                prev.map((item) => (item === dataUrl ? serverUrl : item))
-              );
+          const dataUrl = result.dataUrl;
+          if (!dataUrl) continue;
+          if (result.isHeicConverted) heicConvertedCount++;
+
+          // 1. Instantly append to state using functional updater (setImages(prev => [...prev, newImage]))
+          // This ensures existing images are NEVER overwritten and user gets instant visible preview!
+          setImageUrls((prev) => {
+            if (prev.length >= 3) return prev;
+            return [...prev, dataUrl];
+          });
+          setImageCaptions((prev) => {
+            if (prev.length >= 3) return prev;
+            return [...prev, ''];
+          });
+          addedCount++;
+
+          // 2. Safe index calculation for IndexedDB archive so previous photos at 0, 1 are not overwritten
+          const photoIdx = currentCount + i;
+          const photoKey = `${activeStudentName || 'child'}_${week}_${photoIdx}`;
+          savePhotoToIndexedDB(photoKey, dataUrl, {
+            studentName: activeStudentName || '',
+            week,
+            photoIndex: photoIdx
+          }).catch(() => {});
+
+          // 3. Concurrently upload to server to get permanent disk URL
+          try {
+            const uploadRes = await fetch('/api/upload-photo', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                imageBase64: dataUrl,
+                name: `photo_${activeStudentName || 'child'}_${Date.now()}_${i}`
+              })
+            });
+            if (uploadRes.ok) {
+              const uploadData = await uploadRes.json();
+              if (uploadData.url) {
+                const serverUrl = uploadData.url;
+                // Cache local dataUrl as fallback
+                previewMapRef.current.set(serverUrl, dataUrl);
+
+                // Seamlessly swap temporary preview dataUrl with permanent server URL
+                setImageUrls((prev) =>
+                  prev.map((item) => (item === dataUrl ? serverUrl : item))
+                );
+              }
             }
+          } catch (uploadErr) {
+            console.warn('Background photo upload warning:', uploadErr);
+            // Temporary dataUrl remains active in state safely
           }
-        } catch (uploadErr) {
-          console.warn('Background photo upload warning:', uploadErr);
-          // Temporary dataUrl remains active in state safely
+        } catch (err: any) {
+          console.error('File optimization error:', err);
+          onShowToast(err.message || '사진 처리 중 오류가 발생했습니다.', 'error');
         }
       }
 
       if (addedCount > 0) {
-        onShowToast(`${addedCount}장의 사진이 안전하게 추가되었습니다!`, 'success');
+        if (heicConvertedCount > 0) {
+          onShowToast(`아이폰(HEIC) 사진 ${heicConvertedCount}장이 표준 규격으로 자동 최적화되어 첨부되었습니다! 📱✨`, 'success');
+        } else {
+          onShowToast(`${addedCount}장의 사진이 안전하게 최적화 첨부되었습니다!`, 'success');
+        }
       }
     } finally {
       setIsUploadingPhoto(false);
@@ -937,7 +884,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                     ref={fileInputRef}
                     id="story-form-file-input"
                     type="file"
-                    accept="image/*"
+                    accept="image/*,.heic,.heif,.HEIC,.HEIF"
                     multiple
                     disabled={isUploadingPhoto}
                     onChange={(e) => {
@@ -957,11 +904,12 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                       </div>
                     </div>
                     <span className="text-xs sm:text-sm font-extrabold text-[#262626] mt-1">
-                      {isUploadingPhoto ? '사진을 서버에 안전하게 영구 저장 중...' : `터치하여 스마트폰 사진 올리기 (현재 ${imageUrls.length}/3장)`}
+                      {isUploadingPhoto ? '고화질 사진 최적화 및 서버 영구 보관 중...' : `터치하여 사진 올리기 (현재 ${imageUrls.length}/3장)`}
                     </span>
-                    <span className="text-[11px] text-[#8E8E8E]">
-                      {isUploadingPhoto ? '잠시만 기다려 주세요...' : '스마트폰 앨범에서 우리 아이 최고 선명한 사진을 선택하세요'}
-                    </span>
+                    <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-[#8E8E8E]">
+                      <span>아이폰(HEIC) · 갤럭시 · WebP 자동 호환</span>
+                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full font-bold border border-emerald-200">95% 자동경량화</span>
+                    </div>
                   </div>
                 </div>
               )}

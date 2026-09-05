@@ -127,4 +127,6 @@ export function getCurrentWeekString(now = new Date()): string {
   return WEEKS_LIST[0];
 }
 
+declare module 'heic2any';
+
 
