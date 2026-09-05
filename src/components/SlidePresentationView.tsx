@@ -312,13 +312,13 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
 
   const totalSlides = filteredStories.length;
 
-  // Reset current index & photoSubIndex on filter or slide change
+  // Reset current index on filter change
   useEffect(() => {
     if (currentIndex >= totalSlides && totalSlides > 0) {
       setCurrentIndex(0);
     }
     setPhotoSubIndex(0);
-  }, [selectedWeek, selectedClass, totalSlides, currentIndex]);
+  }, [selectedWeek, selectedClass, totalSlides]);
 
   // Reset image zoom whenever slide index or photo sub index changes
   useEffect(() => {
@@ -326,6 +326,58 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
     setZoomPan({ x: 0, y: 0 });
     setIsDragging(false);
   }, [currentIndex, photoSubIndex]);
+
+  // Background Image Preloader: Proactively load adjacent students' photos to eliminate transition delay
+  const preloadedUrlsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!filteredStories || filteredStories.length <= 1) return;
+
+    const total = filteredStories.length;
+    // Preload next 2 students and previous student
+    const targetIndices = [
+      (currentIndex + 1) % total,
+      (currentIndex + 2) % total,
+      (currentIndex - 1 + total) % total,
+    ];
+
+    targetIndices.forEach(async (idx) => {
+      const story = filteredStories[idx];
+      if (!story) return;
+
+      const urlsToLoad: string[] = [];
+      if (Array.isArray(story.imageUrls) && story.imageUrls.length > 0) {
+        urlsToLoad.push(...story.imageUrls);
+      } else if (story.imageUrl) {
+        urlsToLoad.push(story.imageUrl);
+      }
+
+      for (let pIdx = 0; pIdx < urlsToLoad.length; pIdx++) {
+        const u = urlsToLoad[pIdx];
+        if (!u || preloadedUrlsRef.current.has(u)) continue;
+
+        if (u.startsWith('idb:')) {
+          try {
+            const resolved = await findPhotoForStudent(story.studentName, undefined, pIdx);
+            if (resolved && !preloadedUrlsRef.current.has(resolved)) {
+              preloadedUrlsRef.current.add(resolved);
+              const img = new Image();
+              img.src = resolved;
+              if ('decode' in img) img.decode().catch(() => {});
+            }
+          } catch {}
+          continue;
+        }
+
+        if (u.startsWith('http') || u.startsWith('data:') || u.startsWith('/')) {
+          preloadedUrlsRef.current.add(u);
+          const img = new Image();
+          img.src = u;
+          if ('decode' in img) img.decode().catch(() => {});
+        }
+      }
+    });
+  }, [currentIndex, filteredStories]);
 
   // Reset modal zoom whenever modal image changes
   useEffect(() => {
@@ -445,52 +497,76 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
     setModalZoomPan({ x: 0, y: 0 });
   };
 
-  const goToNext = useCallback(() => {
-    if (totalSlides === 0) return;
+  // Animation lock and throttle control to prevent multiple rapid triggers and rendering lag
+  const isNavigatingRef = useRef(false);
+  const lastNavTimeRef = useRef(0);
+  const trailingNavTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const NAVIGATION_COOLDOWN = 200; // ms
 
-    const currentStory = filteredStories[currentIndex];
-    const photos = currentStory
-      ? (currentStory.imageUrls && currentStory.imageUrls.length > 0
-          ? currentStory.imageUrls
-          : (currentStory.imageUrl ? [currentStory.imageUrl] : []))
-      : [];
-    const maxPhotoSteps = photos.length > 1 ? photos.length + 1 : 1;
-
-    if (photoSubIndex < maxPhotoSteps - 1) {
-      setPhotoSubIndex((prev) => prev + 1);
-    } else {
-      setPhotoSubIndex(0);
-      setDirection(1);
-      if (isShuffle && totalSlides > 1) {
-        let nextIndex = Math.floor(Math.random() * totalSlides);
-        if (nextIndex === currentIndex) nextIndex = (currentIndex + 1) % totalSlides;
-        setCurrentIndex(nextIndex);
-      } else {
-        setCurrentIndex((prev) => (prev + 1) % totalSlides);
+  // Clean up trailing timer on unmount
+  useEffect(() => {
+    return () => {
+      if (trailingNavTimerRef.current) {
+        clearTimeout(trailingNavTimerRef.current);
       }
-    }
-  }, [totalSlides, isShuffle, currentIndex, filteredStories, photoSubIndex]);
+    };
+  }, []);
 
-  const goToPrev = useCallback(() => {
+  // Immediate state navigation with throttle & debounce
+  const triggerNavigation = useCallback((dir: 1 | -1) => {
     if (totalSlides === 0) return;
 
-    if (photoSubIndex > 0) {
-      setPhotoSubIndex((prev) => prev - 1);
-    } else {
-      setDirection(-1);
-      const prevStoryIndex = (currentIndex - 1 + totalSlides) % totalSlides;
-      const prevStory = filteredStories[prevStoryIndex];
-      const prevPhotos = prevStory
-        ? (prevStory.imageUrls && prevStory.imageUrls.length > 0
-            ? prevStory.imageUrls
-            : (prevStory.imageUrl ? [prevStory.imageUrl] : []))
-        : [];
-      const prevMaxSteps = prevPhotos.length > 1 ? prevPhotos.length + 1 : 1;
+    const now = Date.now();
+    const elapsed = now - lastNavTimeRef.current;
 
-      setCurrentIndex(prevStoryIndex);
-      setPhotoSubIndex(prevMaxSteps - 1);
+    // Prevent duplicate rapid calls & buffer trailing click
+    if (isNavigatingRef.current || elapsed < NAVIGATION_COOLDOWN) {
+      if (trailingNavTimerRef.current) {
+        clearTimeout(trailingNavTimerRef.current);
+      }
+      const delay = Math.max(NAVIGATION_COOLDOWN - elapsed, 40);
+      trailingNavTimerRef.current = setTimeout(() => {
+        triggerNavigation(dir);
+      }, delay);
+      return;
     }
-  }, [totalSlides, currentIndex, filteredStories, photoSubIndex]);
+
+    if (trailingNavTimerRef.current) {
+      clearTimeout(trailingNavTimerRef.current);
+      trailingNavTimerRef.current = null;
+    }
+
+    lastNavTimeRef.current = now;
+    isNavigatingRef.current = true;
+
+    // Immediate synchronous state updates: switches to the next/prev student with 0ms delay
+    setDirection(dir);
+    setPhotoSubIndex(0);
+    setZoomScale(1);
+    setZoomPan({ x: 0, y: 0 });
+    setIsDragging(false);
+
+    if (dir === 1) {
+      setCurrentIndex((prev) => {
+        if (isShuffle && totalSlides > 1) {
+          let nextIndex = Math.floor(Math.random() * totalSlides);
+          if (nextIndex === prev) nextIndex = (prev + 1) % totalSlides;
+          return nextIndex;
+        }
+        return (prev + 1) % totalSlides;
+      });
+    } else {
+      setCurrentIndex((prev) => (prev - 1 + totalSlides) % totalSlides);
+    }
+
+    // Release animation lock once the transition settles
+    setTimeout(() => {
+      isNavigatingRef.current = false;
+    }, NAVIGATION_COOLDOWN);
+  }, [totalSlides, isShuffle]);
+
+  const goToNext = useCallback(() => triggerNavigation(1), [triggerNavigation]);
+  const goToPrev = useCallback(() => triggerNavigation(-1), [triggerNavigation]);
 
   // Double click heart reaction trigger
   const handleDoubleTap = (storyId: string) => {
@@ -611,12 +687,12 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
 
   const currentStory = filteredStories[currentIndex];
 
-  // Slide Animation Variants
+  // Slide Animation Variants: Snappy, lightweight translation without 600ms exit-wait delay
   const slideVariants = {
     enter: (dir: number) => ({
-      x: dir > 0 ? 250 : -250,
+      x: dir > 0 ? 50 : -50,
       opacity: 0,
-      scale: 0.97
+      scale: 0.99
     }),
     center: {
       x: 0,
@@ -624,9 +700,9 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
       scale: 1
     },
     exit: (dir: number) => ({
-      x: dir < 0 ? 250 : -250,
+      x: dir < 0 ? 50 : -50,
       opacity: 0,
-      scale: 0.97
+      scale: 0.99
     })
   };
 
@@ -795,8 +871,8 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
         <button
           id="ppt-btn-prev"
           onClick={goToPrev}
-          className="absolute left-1 sm:left-6 z-30 p-2.5 sm:p-3.5 rounded-full bg-white/90 border border-[#DBDBDB] text-[#262626] hover:bg-black hover:text-white transition-all shadow-md backdrop-blur-md group"
-          title="이전 슬라이드"
+          className="absolute left-1 sm:left-6 z-30 p-2.5 sm:p-3.5 rounded-full bg-white/90 border border-[#DBDBDB] text-[#262626] hover:bg-black hover:text-white active:scale-90 transition-all shadow-md backdrop-blur-md group"
+          title="이전 원아 슬라이드 (← 키)"
         >
           <ChevronLeft className="w-5 h-5 group-hover:-translate-x-0.5 transition-transform" />
         </button>
@@ -805,14 +881,14 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
         <button
           id="ppt-btn-next"
           onClick={goToNext}
-          className="absolute right-1 sm:right-6 z-30 p-2.5 sm:p-3.5 rounded-full bg-black border border-black text-white hover:bg-pink-600 hover:border-pink-600 transition-all shadow-md backdrop-blur-md group"
-          title="다음 슬라이드"
+          className="absolute right-1 sm:right-6 z-30 p-2.5 sm:p-3.5 rounded-full bg-black border border-black text-white hover:bg-pink-600 hover:border-pink-600 active:scale-90 transition-all shadow-md backdrop-blur-md group"
+          title="다음 원아 슬라이드 (→ 키)"
         >
           <ChevronRight className="w-5 h-5 group-hover:translate-x-0.5 transition-transform" />
         </button>
 
         {/* Instagram Card Container */}
-        <AnimatePresence custom={direction} mode="wait">
+        <AnimatePresence custom={direction} mode="popLayout" initial={false}>
           <motion.div
             ref={slideCardRef}
             key={currentStory.id}
@@ -821,7 +897,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
             initial="enter"
             animate="center"
             exit="exit"
-            transition={{ duration: 0.3, ease: 'easeOut' }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
             className="w-full max-w-full lg:max-w-[1600px] bg-white border border-[#DBDBDB] rounded-3xl shadow-xl overflow-hidden my-2"
           >
             {/* Instagram Post Header */}
@@ -1086,6 +1162,34 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                           }}
                           className="pointer-events-none select-none drop-shadow-2xl"
                         />
+
+                        {/* Inner photo sub-navigation within current child */}
+                        {photos.length > 1 && photoSubIndex > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPhotoSubIndex((p) => p - 1);
+                            }}
+                            className="absolute left-3.5 z-20 p-2 sm:p-2.5 rounded-full bg-black/60 hover:bg-black/90 text-white border border-white/20 backdrop-blur-md transition-all active:scale-90 shadow-lg cursor-pointer"
+                            title="이전 사진 보기"
+                          >
+                            <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+                          </button>
+                        )}
+                        {photos.length > 1 && photoSubIndex < photos.length - 1 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPhotoSubIndex((p) => p + 1);
+                            }}
+                            className="absolute right-3.5 z-20 p-2 sm:p-2.5 rounded-full bg-black/60 hover:bg-black/90 text-white border border-white/20 backdrop-blur-md transition-all active:scale-90 shadow-lg cursor-pointer"
+                            title="다음 사진 보기"
+                          >
+                            <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
+                          </button>
+                        )}
 
                         {/* Top Right Badge */}
                         <div className="absolute top-3 right-3 px-3 py-1 bg-black/70 backdrop-blur-md rounded-full text-xs font-extrabold text-white border border-white/20 z-20">
@@ -1495,7 +1599,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
               </button>
 
               {/* Photos Grid: 1, 2, or 3 Photos */}
-              <AnimatePresence custom={direction} mode="wait">
+              <AnimatePresence custom={direction} mode="popLayout" initial={false}>
                 <motion.div
                   key={currentStory.id}
                   custom={direction}
@@ -1503,7 +1607,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
                   initial="enter"
                   animate="center"
                   exit="exit"
-                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                  transition={{ duration: 0.18, ease: 'easeOut' }}
                   className={`w-full h-full max-w-[98vw] max-h-[88vh] mx-auto grid gap-3 sm:gap-4 md:gap-5 items-center justify-center ${
                     photos.length === 1
                       ? 'grid-cols-1'
