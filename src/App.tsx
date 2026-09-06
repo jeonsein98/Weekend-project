@@ -49,6 +49,14 @@ export default function App() {
         ]);
         if (serverStories && serverStories.length > 0) {
           setStories(serverStories);
+          // If the initial date-based selectedWeek has 0 stories, automatically select the most active story week so users don't see empty screen
+          const hasMatchInCurrentWeek = serverStories.some(s => isWeekMatch(s.week, selectedWeek));
+          if (!hasMatchInCurrentWeek) {
+            const lastStory = serverStories[serverStories.length - 1];
+            if (lastStory?.week) {
+              setSelectedWeek(lastStory.week);
+            }
+          }
         }
         if (serverRoster && serverRoster.length > 0) {
           setRoster(serverRoster);
@@ -325,6 +333,9 @@ export default function App() {
             stories={stories}
             selectedWeek={selectedWeek}
             setSelectedWeek={setSelectedWeek}
+            selectedClass={selectedClass}
+            setSelectedClass={setSelectedClass}
+            roster={roster}
             onSelectForPresentation={(week) => {
               if (week) setSelectedWeek(week);
               setCurrentView('ppt');

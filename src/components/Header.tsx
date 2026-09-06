@@ -30,9 +30,10 @@ export const Header: React.FC<HeaderProps> = ({
   storyCount
 }) => {
   const availableClasses = Array.from(
-    new Set(
-      roster.map((s) => s.className?.trim()).filter(Boolean) as string[]
-    )
+    new Set([
+      '은솔1반',
+      ...roster.map((s) => s.className?.trim()).filter(Boolean) as string[]
+    ])
   );
 
   return (

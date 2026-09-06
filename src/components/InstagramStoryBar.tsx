@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { RosterStudent, StoryItem, isWeekMatch } from '../types';
+import { RosterStudent, StoryItem, isWeekMatch, isClassMatch, getStudentClass } from '../types';
 import { Users, Sparkles, UserCheck } from 'lucide-react';
 import { findPhotoForStudent } from '../lib/idb';
 
@@ -78,13 +78,19 @@ export const InstagramStoryBar: React.FC<InstagramStoryBarProps> = ({
   const classesList = Array.from(
     new Set([
       '전체',
-      ...roster.map((s) => s.className?.trim() || '은솔1반'),
-      '은솔1반'
+      '은솔1반',
+      ...roster.map((s) => s.className?.trim()).filter(Boolean) as string[],
+      ...stories.map((s) => getStudentClass(s.studentName, roster, s)).filter(Boolean)
     ])
   );
 
-  // Get stories for current week or overall
-  const weekStories = stories.filter((s) => selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek));
+  // Get stories matching both selected week and selected class
+  const displayStories = stories.filter((s) => {
+    const matchWeek = selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek);
+    const sClass = getStudentClass(s.studentName, roster, s);
+    const matchClass = !selectedClass || selectedClass === '전체' || isClassMatch(sClass, selectedClass);
+    return matchWeek && matchClass;
+  });
 
   return (
     <div className="w-full bg-white border-b border-[#DBDBDB] py-3.5 px-4 overflow-x-auto no-scrollbar shadow-2xs select-none">
@@ -92,12 +98,13 @@ export const InstagramStoryBar: React.FC<InstagramStoryBarProps> = ({
         
         {/* Class Filter Story Bubbles */}
         {classesList.map((cName) => {
-          const isSelected = selectedClass === cName;
+          const isSelected = selectedClass === cName || (cName === '전체' && (!selectedClass || selectedClass === '전체'));
           const classStoryCount = cName === '전체'
-            ? weekStories.length
-            : weekStories.filter((s) => {
-                const match = roster.find((r) => r.name.trim().toLowerCase() === s.studentName.trim().toLowerCase());
-                return (match?.className?.trim() || '은솔1반') === cName;
+            ? stories.filter((s) => selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek)).length
+            : stories.filter((s) => {
+                const matchWeek = selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek);
+                const sClass = getStudentClass(s.studentName, roster, s);
+                return matchWeek && isClassMatch(sClass, cName);
               }).length;
 
           return (
@@ -142,14 +149,22 @@ export const InstagramStoryBar: React.FC<InstagramStoryBarProps> = ({
         {/* Vertical Divider */}
         <div className="w-px h-10 bg-[#DBDBDB] shrink-0" />
 
-        {/* Individual Student Story Bubbles for Selected Week */}
+        {/* Individual Student Story Bubbles for Selected Week & Class */}
         <div className="flex items-center gap-3.5 sm:gap-5">
-          {weekStories.length === 0 ? (
-            <span className="text-xs text-[#8E8E8E] font-medium italic py-2">
-              이 주차에는 등록된 게시물이 없습니다.
-            </span>
+          {displayStories.length === 0 ? (
+            <div className="flex items-center gap-2 py-2 text-xs text-[#8E8E8E] font-medium">
+              <span>이 조건에 일치하는 등록된 학생 이야기가 없습니다.</span>
+              {selectedClass !== '전체' && (
+                <button
+                  onClick={() => setSelectedClass('전체')}
+                  className="px-2.5 py-1 rounded-full bg-pink-50 hover:bg-pink-100 text-pink-600 font-bold border border-pink-200 transition-colors"
+                >
+                  전체 학급 보기
+                </button>
+              )}
+            </div>
           ) : (
-            weekStories.map((story) => {
+            displayStories.map((story) => {
               const isActive = story.id === currentStoryId;
               const photoUrl = (story.imageUrls && story.imageUrls.length > 0) ? story.imageUrls[0] : (story.imageUrl || '');
 

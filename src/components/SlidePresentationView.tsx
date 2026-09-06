@@ -28,7 +28,7 @@ import {
   MoreHorizontal,
   CheckCircle2
 } from 'lucide-react';
-import { StoryItem, RosterStudent, WEEKS_LIST, isWeekMatch } from '../types';
+import { StoryItem, RosterStudent, WEEKS_LIST, isWeekMatch, isClassMatch, getStudentClass } from '../types';
 import { InstagramStoryBar } from './InstagramStoryBar';
 import { WeekTabBar } from './WeekTabBar';
 import { RefreshCw, Camera } from 'lucide-react';
@@ -262,7 +262,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
   selectedWeek,
   setSelectedWeek,
   selectedClass = '전체',
-  setSelectedClass = () => {},
+  setSelectedClass = (_cName: string) => {},
   roster = [],
   onUpdateReaction
 }) => {
@@ -297,16 +297,11 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const slideCardRef = useRef<HTMLDivElement>(null);
 
-  // Filter stories by selected week AND selected class
+  // Filter stories by selected week AND selected class with fault-tolerant matching
   const filteredStories = stories.filter((s) => {
     const matchesWeek = selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek);
-    
-    const studentMatch = roster.find(
-      (r) => r.name.trim().toLowerCase() === s.studentName.trim().toLowerCase()
-    );
-    const studentClass = studentMatch?.className?.trim() || '은솔1반';
-    const matchesClass = selectedClass === '전체' || studentClass === selectedClass;
-
+    const sClass = getStudentClass(s.studentName, roster, s);
+    const matchesClass = !selectedClass || selectedClass === '전체' || isClassMatch(sClass, selectedClass);
     return matchesWeek && matchesClass;
   });
 
@@ -314,7 +309,7 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
 
   // Reset current index on filter change
   useEffect(() => {
-    if (currentIndex >= totalSlides && totalSlides > 0) {
+    if (totalSlides > 0 && currentIndex >= totalSlides) {
       setCurrentIndex(0);
     }
     setPhotoSubIndex(0);
@@ -730,23 +725,43 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
             </div>
           </div>
           <h3 className="text-xl font-black text-[#262626] mb-2">
-            {selectedWeek === '전체' ? '등록된 이야기 게시물이 없습니다.' : `${selectedWeek}에 등록된 이야기가 없습니다.`}
+            {selectedWeek === '전체' && (!selectedClass || selectedClass === '전체')
+              ? '등록된 이야기 게시물이 없습니다.'
+              : `${selectedClass && selectedClass !== '전체' ? `[${selectedClass}] ` : ''}${selectedWeek !== '전체' ? `'${selectedWeek}' ` : ''}조건에 등록된 이야기가 없습니다.`}
           </h3>
           <p className="text-[#737373] max-w-md text-xs sm:text-sm mb-4 leading-relaxed">
-            상단의 '게시물 작성' 버튼을 눌러 우리 아이의 주말 일상을 인스타그램 피드처럼 공유해보세요!
+            상단의 '학부모 작성' 버튼을 눌러 우리 아이의 주말 일상을 공유하거나, 다른 학급/주차의 이야기를 확인해보세요.
           </p>
 
-          {stories.length > 0 && selectedWeek !== '전체' && (
-            <div className="mt-2 flex flex-col items-center gap-2">
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3.5 py-1.5 rounded-full font-bold">
-                💡 다른 주차에 등록된 이야기가 총 {stories.length}건 있습니다!
-              </p>
+          {stories.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
               <button
-                onClick={() => setSelectedWeek && setSelectedWeek('전체')}
-                className="mt-1 px-5 py-2 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 text-white text-xs font-black shadow-xs hover:opacity-90 transition-all active:scale-95 cursor-pointer"
+                onClick={() => {
+                  if (setSelectedWeek) setSelectedWeek('전체');
+                  if (setSelectedClass) setSelectedClass('전체');
+                }}
+                className="px-5 py-2.5 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 text-white text-xs font-black shadow-xs hover:opacity-90 transition-all active:scale-95 cursor-pointer"
               >
-                전체 주차 이야기 보기 (총 {stories.length}건)
+                전체 게시물 모두 보기 (총 {stories.length}건)
               </button>
+
+              {selectedWeek !== '전체' && setSelectedWeek && (
+                <button
+                  onClick={() => setSelectedWeek('전체')}
+                  className="px-4 py-2.5 rounded-full bg-white hover:bg-[#EFEFEF] text-[#262626] text-xs font-bold border border-[#DBDBDB] transition-all cursor-pointer"
+                >
+                  전체 주차 보기
+                </button>
+              )}
+
+              {selectedClass && selectedClass !== '전체' && setSelectedClass && (
+                <button
+                  onClick={() => setSelectedClass('전체')}
+                  className="px-4 py-2.5 rounded-full bg-white hover:bg-[#EFEFEF] text-[#262626] text-xs font-bold border border-[#DBDBDB] transition-all cursor-pointer"
+                >
+                  전체 학급 보기
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -754,11 +769,8 @@ export const SlidePresentationView: React.FC<SlidePresentationViewProps> = ({
     );
   }
 
-  // Find student class for current story
-  const studentMatch = roster.find(
-    (r) => r.name.trim().toLowerCase() === currentStory.studentName.trim().toLowerCase()
-  );
-  const studentClass = studentMatch?.className?.trim() || '햇살반';
+  // Find student class for current story with robust helper
+  const studentClass = getStudentClass(currentStory.studentName, roster, currentStory);
 
   // Calculate total reactions count
   const totalReactions = (Object.values(currentStory.reactions || {}) as (number | string)[]).reduce<number>((acc, curr) => acc + (Number(curr) || 0), 0);

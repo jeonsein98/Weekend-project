@@ -1,4 +1,4 @@
-import { StoryItem, GasConfig, RosterStudent } from '../types';
+import { StoryItem, GasConfig, RosterStudent, isWeekMatch, isClassMatch, getStudentClass } from '../types';
 import { INITIAL_STORIES } from './defaultData';
 import {
   saveStoryToIndexedDB,
@@ -108,7 +108,7 @@ export function cleanupLegacyLocalStorage(): void {
  * Non-destructive bidirectional merge with client storage and IndexedDB.
  * Guarantees zero data loss even across device resets or network drops.
  */
-export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
+export async function fetchStoriesFromServer(options?: { week?: string; className?: string }): Promise<StoryItem[]> {
   cleanupLegacyLocalStorage();
 
   // Retrieve local caches (localStorage and IndexedDB)
@@ -142,7 +142,13 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
   const allClientStories = Array.from(clientMap.values());
 
   try {
-    const res = await fetch('/api/stories');
+    const params = new URLSearchParams();
+    if (options?.week && options.week !== '전체') params.append('week', options.week);
+    if (options?.className && options.className !== '전체') params.append('class', options.className);
+    const queryString = params.toString();
+    const fetchUrl = queryString ? `/api/stories?${queryString}` : '/api/stories';
+
+    const res = await fetch(fetchUrl);
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.stories)) {
@@ -253,7 +259,15 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
         // Cache clean merged data locally and into IndexedDB
         saveLocalStories(cleanedList);
         saveAllStoriesToIndexedDB(cleanedList);
-        return cleanedList;
+
+        let result = cleanedList;
+        if (options?.week && options.week !== '전체') {
+          result = result.filter(s => isWeekMatch(s.week, options.week));
+        }
+        if (options?.className && options.className !== '전체') {
+          result = result.filter(s => isClassMatch((s as any).className || getStudentClass(s.studentName, [], s), options.className));
+        }
+        return result;
       }
     }
   } catch (err) {
@@ -261,10 +275,14 @@ export async function fetchStoriesFromServer(): Promise<StoryItem[]> {
   }
 
   // Fallback to local storage & IndexedDB
-  if (allClientStories.length > 0) {
-    return allClientStories;
+  let fallback = allClientStories.length > 0 ? allClientStories : getLocalStories();
+  if (options?.week && options.week !== '전체') {
+    fallback = fallback.filter(s => isWeekMatch(s.week, options.week));
   }
-  return getLocalStories();
+  if (options?.className && options.className !== '전체') {
+    fallback = fallback.filter(s => isClassMatch((s as any).className || getStudentClass(s.studentName, [], s), options.className));
+  }
+  return fallback;
 }
 
 /**

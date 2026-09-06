@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Presentation, Trash2, Search, Sparkles, Heart, Filter, MessageCircle, CheckCircle2, Camera, ImageOff, RefreshCw } from 'lucide-react';
-import { StoryItem, WEEKS_LIST, isWeekMatch } from '../types';
+import { Presentation, Trash2, Search, Sparkles, Heart, Filter, MessageCircle, CheckCircle2, Camera, ImageOff, RefreshCw, Users } from 'lucide-react';
+import { StoryItem, WEEKS_LIST, RosterStudent, isWeekMatch, isClassMatch, getStudentClass } from '../types';
 import { WeekTabBar } from './WeekTabBar';
 import { findPhotoForStudent } from '../lib/idb';
 
@@ -8,6 +8,9 @@ interface WeekGalleryViewProps {
   stories: StoryItem[];
   selectedWeek: string;
   setSelectedWeek: (week: string) => void;
+  selectedClass?: string;
+  setSelectedClass?: (cName: string) => void;
+  roster?: RosterStudent[];
   onSelectForPresentation: (week: string) => void;
   onDeleteStory: (id: string) => void;
 }
@@ -130,19 +133,31 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
   stories,
   selectedWeek,
   setSelectedWeek,
+  selectedClass = '전체',
+  setSelectedClass,
+  roster = [],
   onSelectForPresentation,
   onDeleteStory
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
+  const availableClasses = Array.from(
+    new Set([
+      '은솔1반',
+      ...roster.map((s) => s.className?.trim()).filter(Boolean) as string[]
+    ])
+  );
+
   const filteredStories = stories.filter((s) => {
     const matchesWeek = selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek);
+    const sClass = getStudentClass(s.studentName, roster, s);
+    const matchesClass = !selectedClass || selectedClass === '전체' || isClassMatch(sClass, selectedClass);
     const matchesSearch =
       !searchQuery.trim() ||
       s.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (s.title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (s.content || '').toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesWeek && matchesSearch;
+    return matchesWeek && matchesClass && matchesSearch;
   });
 
   return (
@@ -178,6 +193,26 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
 
         {/* Filter and Search Bar */}
         <div className="flex flex-wrap items-center gap-2.5">
+          {/* Class Selector */}
+          {setSelectedClass && (
+            <div className="flex items-center gap-2 bg-[#F5F5F5] px-3.5 py-2 rounded-full border border-[#DBDBDB]">
+              <Users className="w-4 h-4 text-purple-600" />
+              <select
+                id="gallery-class-select"
+                value={selectedClass}
+                onChange={(e) => setSelectedClass(e.target.value)}
+                className="bg-transparent text-xs font-extrabold text-[#262626] focus:outline-none cursor-pointer"
+              >
+                <option value="전체" className="bg-white text-[#262626]">전체 학급</option>
+                {availableClasses.map((cName) => (
+                  <option key={cName} value={cName} className="bg-white text-[#262626]">
+                    {cName}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Week Selector */}
           <div className="flex items-center gap-2 bg-[#F5F5F5] px-3.5 py-2 rounded-full border border-[#DBDBDB]">
             <Filter className="w-4 h-4 text-pink-500" />
@@ -230,16 +265,40 @@ export const WeekGalleryView: React.FC<WeekGalleryViewProps> = ({
       {filteredStories.length === 0 ? (
         <div className="text-center py-16 bg-white rounded-3xl border border-[#DBDBDB] text-[#737373] p-6">
           <p className="font-extrabold text-base text-[#262626] mb-1">
-            {selectedWeek === '전체' ? '일치하는 이야기 게시물이 없습니다.' : `'${selectedWeek}'에 등록된 이야기가 없습니다.`}
+            {selectedWeek === '전체' && (!selectedClass || selectedClass === '전체')
+              ? '등록된 이야기 게시물이 없습니다.'
+              : `${selectedClass && selectedClass !== '전체' ? `[${selectedClass}] ` : ''}${selectedWeek !== '전체' ? `'${selectedWeek}' ` : ''}조건에 일치하는 이야기가 없습니다.`}
           </p>
-          <p className="text-xs mb-4">주차 필터를 변경하거나 새로운 게시물을 등록해 보세요.</p>
-          {stories.length > 0 && selectedWeek !== '전체' && (
-            <button
-              onClick={() => setSelectedWeek('전체')}
-              className="px-5 py-2 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 text-white text-xs font-black shadow-xs hover:opacity-90 transition-all active:scale-95 cursor-pointer"
-            >
-              전체 주차 이야기 보기 (총 {stories.length}건)
-            </button>
+          <p className="text-xs mb-4">학급 또는 주차 필터를 변경하거나 전체 이야기를 확인해 보세요.</p>
+          {stories.length > 0 && (
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                onClick={() => {
+                  setSelectedWeek('전체');
+                  if (setSelectedClass) setSelectedClass('전체');
+                  setSearchQuery('');
+                }}
+                className="px-5 py-2 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 text-white text-xs font-black shadow-xs hover:opacity-90 transition-all active:scale-95 cursor-pointer"
+              >
+                전체 게시물 모두 보기 (총 {stories.length}건)
+              </button>
+              {selectedWeek !== '전체' && (
+                <button
+                  onClick={() => setSelectedWeek('전체')}
+                  className="px-4 py-2 rounded-full bg-[#F5F5F5] hover:bg-[#EFEFEF] text-[#262626] text-xs font-bold border border-[#DBDBDB] transition-all"
+                >
+                  전체 주차 보기
+                </button>
+              )}
+              {selectedClass && selectedClass !== '전체' && setSelectedClass && (
+                <button
+                  onClick={() => setSelectedClass('전체')}
+                  className="px-4 py-2 rounded-full bg-[#F5F5F5] hover:bg-[#EFEFEF] text-[#262626] text-xs font-bold border border-[#DBDBDB] transition-all"
+                >
+                  전체 학급 보기
+                </button>
+              )}
+            </div>
           )}
         </div>
       ) : (

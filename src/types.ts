@@ -62,12 +62,81 @@ export const WEEKS_LIST = [
 ];
 
 /**
- * Check if two week strings match, ignoring inner whitespace
+ * Check if two week strings match with high fault tolerance:
+ * - Ignores spaces ("9월 1주차" === "9월1주차")
+ * - Matches base week prefix (e.g. "9월 1주차" matches "9월 1주차(방학지낸이야기)")
+ * - Matches vacation tags and date ranges ("9/5~9/6")
+ * - Handles '전체' / 'all' wildcard
  */
 export function isWeekMatch(weekA?: string, weekB?: string): boolean {
   if (!weekA || !weekB) return false;
-  if (weekA === '전체' || weekB === '전체') return true;
-  return weekA.replace(/\s+/g, '') === weekB.replace(/\s+/g, '');
+  if (weekA === '전체' || weekB === '전체' || weekA === 'all' || weekB === 'all') return true;
+
+  const cleanA = weekA.replace(/\s+/g, '').trim();
+  const cleanB = weekB.replace(/\s+/g, '').trim();
+  if (cleanA === cleanB) return true;
+
+  // Extract base month/week e.g. "9월1주차", "2월1주차", "3월1주차"
+  const extractWeekToken = (str: string): string | null => {
+    const match = str.match(/(\d+월\s*\d+주차)/);
+    return match ? match[1].replace(/\s+/g, '') : null;
+  };
+
+  const tokenA = extractWeekToken(cleanA);
+  const tokenB = extractWeekToken(cleanB);
+  if (tokenA && tokenB && tokenA === tokenB) return true;
+  if (tokenA && cleanB.includes(tokenA)) return true;
+  if (tokenB && cleanA.includes(tokenB)) return true;
+
+  // Compare after removing brackets and parentheses
+  const strippedA = cleanA.replace(/[\(\)\[\]（）]/g, '');
+  const strippedB = cleanB.replace(/[\(\)\[\]（）]/g, '');
+  if (strippedA === strippedB) return true;
+  if (strippedA.includes(strippedB) || strippedB.includes(strippedA)) return true;
+
+  return false;
+}
+
+/**
+ * Check if two class strings match:
+ * - Handles '전체' / 'all' wildcard
+ * - Ignores spacing ("은솔 1반" === "은솔1반")
+ * - Case-insensitive
+ */
+export function isClassMatch(classA?: string, classB?: string): boolean {
+  if (!classA || !classB) return true; // Wildcard if unspecified
+  if (classA === '전체' || classB === '전체' || classA === 'all' || classB === 'all') return true;
+
+  const normA = classA.replace(/\s+/g, '').toLowerCase().trim();
+  const normB = classB.replace(/\s+/g, '').toLowerCase().trim();
+  if (normA === normB) return true;
+
+  return normA.includes(normB) || normB.includes(normA);
+}
+
+/**
+ * Resolve a student's class name from roster or story
+ */
+export function getStudentClass(
+  studentName: string,
+  roster: RosterStudent[] = [],
+  story?: Partial<StoryItem> & { className?: string }
+): string {
+  if (!studentName) return '은솔1반';
+  const cleanName = studentName.trim().toLowerCase();
+
+  const matched = roster.find(
+    (r) => r.name && r.name.trim().toLowerCase() === cleanName
+  );
+  if (matched?.className?.trim()) {
+    return matched.className.trim();
+  }
+
+  if (story?.className?.trim()) {
+    return story.className.trim();
+  }
+
+  return '은솔1반';
 }
 
 /**

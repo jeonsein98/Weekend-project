@@ -88,6 +88,44 @@ const BANNED_MOCK_STORY_IDS = new Set([
   'story-eunsol'
 ]);
 
+function isWeekMatch(weekA?: string, weekB?: string): boolean {
+  if (!weekA || !weekB) return false;
+  if (weekA === '전체' || weekB === '전체' || weekA === 'all' || weekB === 'all') return true;
+
+  const cleanA = weekA.replace(/\s+/g, '').trim();
+  const cleanB = weekB.replace(/\s+/g, '').trim();
+  if (cleanA === cleanB) return true;
+
+  const extractWeekToken = (str: string): string | null => {
+    const match = str.match(/(\d+월\s*\d+주차)/);
+    return match ? match[1].replace(/\s+/g, '') : null;
+  };
+
+  const tokenA = extractWeekToken(cleanA);
+  const tokenB = extractWeekToken(cleanB);
+  if (tokenA && tokenB && tokenA === tokenB) return true;
+  if (tokenA && cleanB.includes(tokenA)) return true;
+  if (tokenB && cleanA.includes(tokenB)) return true;
+
+  const strippedA = cleanA.replace(/[\(\)\[\]（）]/g, '');
+  const strippedB = cleanB.replace(/[\(\)\[\]（）]/g, '');
+  if (strippedA === strippedB) return true;
+  if (strippedA.includes(strippedB) || strippedB.includes(strippedA)) return true;
+
+  return false;
+}
+
+function isClassMatch(classA?: string, classB?: string): boolean {
+  if (!classA || !classB) return true;
+  if (classA === '전체' || classB === '전체' || classA === 'all' || classB === 'all') return true;
+
+  const normA = classA.replace(/\s+/g, '').toLowerCase().trim();
+  const normB = classB.replace(/\s+/g, '').toLowerCase().trim();
+  if (normA === normB) return true;
+
+  return normA.includes(normB) || normB.includes(normA);
+}
+
 function normalizeWeekName(week?: string): string {
   if (!week) return '전체';
   return week.replace(/\s+/g, '');
@@ -96,10 +134,7 @@ function normalizeWeekName(week?: string): string {
 function isSameStudentAndWeek(name1?: string, week1?: string, name2?: string, week2?: string): boolean {
   if (!name1 || !name2) return false;
   if (name1.trim().toLowerCase() !== name2.trim().toLowerCase()) return false;
-  const w1 = normalizeWeekName(week1);
-  const w2 = normalizeWeekName(week2);
-  if (w1 === '전체' || w2 === '전체') return true;
-  return w1 === w2;
+  return isWeekMatch(week1, week2);
 }
 
 function readStories(): any[] {
@@ -478,11 +513,27 @@ app.post('/api/gemini-caption-recommendation', async (req, res) => {
 
 // --- Persistent Stories & Photo APIs ---
 
-// 1. Get all stories
-app.get('/api/stories', (_req, res) => {
+// 1. Get stories (supports optional query filters: week, class, selectedWeek, selectedClass)
+app.get('/api/stories', (req, res) => {
   try {
-    const stories = readStories();
-    res.json({ success: true, stories });
+    let stories = readStories();
+    const weekQuery = (req.query.week || req.query.selectedWeek) as string | undefined;
+    const classQuery = (req.query.class || req.query.className || req.query.selectedClass) as string | undefined;
+
+    if (weekQuery && weekQuery !== '전체' && weekQuery !== 'all') {
+      stories = stories.filter((s: any) => isWeekMatch(s.week, weekQuery));
+    }
+
+    if (classQuery && classQuery !== '전체' && classQuery !== 'all') {
+      const roster = readRoster();
+      stories = stories.filter((s: any) => {
+        const studentMatch = roster.find((r: any) => r.name && r.name.trim().toLowerCase() === (s.studentName || '').trim().toLowerCase());
+        const studentClass = studentMatch?.className?.trim() || s.className?.trim() || '은솔1반';
+        return isClassMatch(studentClass, classQuery);
+      });
+    }
+
+    res.json({ success: true, stories, total: stories.length });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
