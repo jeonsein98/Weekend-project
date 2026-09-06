@@ -2,6 +2,7 @@ export interface StoryItem {
   id: string;
   week: string; // e.g. "9월 1주차(방학지낸 이야기)"
   studentName: string; // e.g. "김민준"
+  className?: string; // e.g. "은솔1반"
   parentPin?: string; // 학부모 인증 비밀번호 (4자리)
   title: string;
   content: string;
@@ -62,10 +63,105 @@ export const WEEKS_LIST = [
 ];
 
 /**
+ * Canonical week key mapping so that all equivalent expressions mutually match:
+ * - "9월 1주차(방학지낸이야기)" === "9월 1주차" === "9월1주차" === "9/5~9/6" === "9.5~9.6" -> "w_9_1"
+ * - "9월 2주차" === "9/12~9/13" -> "w_9_2"
+ * - "9월 3주차" === "9/19~9/20" -> "w_9_3"
+ * - "9월 4주차" === "9/26~9/27" -> "w_9_4"
+ * - "10월 1주차" === "10/3~10/4" -> "w_10_1"
+ * - "10월 2주차" === "10/10~10/11" -> "w_10_2"
+ * - "10월 3주차" === "10/17~10/18" -> "w_10_3"
+ * - "10월 4주차" === "10/24~10/25" -> "w_10_4"
+ * - "10월 5주차" === "10/31~11/1" -> "w_10_5"
+ * - "11월 1주차" === "11/7~11/8" -> "w_11_1"
+ * - "11월 2주차" === "11/14~11/15" -> "w_11_2"
+ * - "11월 3주차" === "11/21~11/22" -> "w_11_3"
+ * - "11월 4주차" === "11/28~11/29" -> "w_11_4"
+ * - "12월 1주차" === "12/5~12/6" -> "w_12_1"
+ * - "12월 2주차" === "12/12~12/13" -> "w_12_2"
+ * - "12월 3주차" === "12/19~12/20" -> "w_12_3"
+ * - "12월 4주차" === "12/26~12/27" -> "w_12_4"
+ * - "1월 1주차" === "1/2~1/3" -> "w_1_1"
+ * - "1월 2주차" === "1/9~1/10" -> "w_1_2"
+ * - "1월 3주차" === "1/16~1/17" -> "w_1_3"
+ * - "1월 4주차" === "1/23~1/24" -> "w_1_4"
+ * - "1월 5주차" === "1/30~1/31" -> "w_1_5"
+ * - "2월 1주차" === "2/6~2/7" === "2월 1주차(방학지낸이야기)" -> "w_2_1"
+ * - "3월 1주차" === "3/6~3/7" === "3/7~3/8" === "3/5~3/6" -> "w_3_1"
+ */
+export function getCanonicalWeekKey(weekStr?: string): string {
+  if (!weekStr) return '';
+  const clean = weekStr.replace(/\s+/g, '').toLowerCase().trim();
+  if (clean === '전체' || clean === 'all') return 'all';
+
+  // Vacation stories mapping
+  if (clean.includes('방학지낸이야기') || clean.includes('방학이야기')) {
+    if (clean.includes('2월') || clean.includes('2/')) return 'w_2_1';
+    return 'w_9_1';
+  }
+
+  // Date ranges like 9/5~9/6 or 9.5~9.6 or 9-5~9-6
+  const dateRangeMatch = clean.match(/(\d+)[\/\.\-](\d+)~(\d+)[\/\.\-](\d+)/);
+  if (dateRangeMatch) {
+    const m = parseInt(dateRangeMatch[1], 10);
+    const d = parseInt(dateRangeMatch[2], 10);
+    if (m === 9) {
+      if (d <= 9) return 'w_9_1';
+      if (d <= 16) return 'w_9_2';
+      if (d <= 23) return 'w_9_3';
+      return 'w_9_4';
+    }
+    if (m === 10) {
+      if (d <= 7) return 'w_10_1';
+      if (d <= 14) return 'w_10_2';
+      if (d <= 21) return 'w_10_3';
+      if (d <= 28) return 'w_10_4';
+      return 'w_10_5';
+    }
+    if (m === 11) {
+      if (d <= 10) return 'w_11_1';
+      if (d <= 17) return 'w_11_2';
+      if (d <= 24) return 'w_11_3';
+      return 'w_11_4';
+    }
+    if (m === 12) {
+      if (d <= 8) return 'w_12_1';
+      if (d <= 15) return 'w_12_2';
+      if (d <= 22) return 'w_12_3';
+      return 'w_12_4';
+    }
+    if (m === 1) {
+      if (d <= 5) return 'w_1_1';
+      if (d <= 12) return 'w_1_2';
+      if (d <= 19) return 'w_1_3';
+      if (d <= 26) return 'w_1_4';
+      return 'w_1_5';
+    }
+    if (m === 2) {
+      return 'w_2_1';
+    }
+    if (m === 3) {
+      if (d <= 10) return 'w_3_1';
+      if (d <= 17) return 'w_3_2';
+      if (d <= 24) return 'w_3_3';
+      return 'w_3_4';
+    }
+  }
+
+  // Month and week pattern: e.g. "9월 1주차", "9월1주차", "9월1주"
+  const mwMatch = clean.match(/(\d+)월\s*(\d+)주차?/);
+  if (mwMatch) {
+    return `w_${mwMatch[1]}_${mwMatch[2]}`;
+  }
+
+  // Fallback: stripped string without brackets
+  return clean.replace(/[\(\)\[\]（）]/g, '');
+}
+
+/**
  * Check if two week strings match with high fault tolerance:
- * - Ignores spaces ("9월 1주차" === "9월1주차")
- * - Matches base week prefix (e.g. "9월 1주차" matches "9월 1주차(방학지낸이야기)")
- * - Matches vacation tags and date ranges ("9/5~9/6")
+ * - Uses canonical week mapping (e.g. "9월 1주차" matches "9/5~9/6" and "9월 1주차(방학지낸이야기)")
+ * - Ignores spaces and punctuation
  * - Handles '전체' / 'all' wildcard
  */
 export function isWeekMatch(weekA?: string, weekB?: string): boolean {
@@ -76,17 +172,9 @@ export function isWeekMatch(weekA?: string, weekB?: string): boolean {
   const cleanB = weekB.replace(/\s+/g, '').trim();
   if (cleanA === cleanB) return true;
 
-  // Extract base month/week e.g. "9월1주차", "2월1주차", "3월1주차"
-  const extractWeekToken = (str: string): string | null => {
-    const match = str.match(/(\d+월\s*\d+주차)/);
-    return match ? match[1].replace(/\s+/g, '') : null;
-  };
-
-  const tokenA = extractWeekToken(cleanA);
-  const tokenB = extractWeekToken(cleanB);
-  if (tokenA && tokenB && tokenA === tokenB) return true;
-  if (tokenA && cleanB.includes(tokenA)) return true;
-  if (tokenB && cleanA.includes(tokenB)) return true;
+  const canonA = getCanonicalWeekKey(cleanA);
+  const canonB = getCanonicalWeekKey(cleanB);
+  if (canonA && canonB && canonA === canonB) return true;
 
   // Compare after removing brackets and parentheses
   const strippedA = cleanA.replace(/[\(\)\[\]（）]/g, '');

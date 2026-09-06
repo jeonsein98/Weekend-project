@@ -1,5 +1,17 @@
 [
   {
+    "studentName": "강루하",
+    "week": "9월 1주차(방학지낸이야기)",
+    "title": "주말 이야기 테스트",
+    "content": "가족과 함께 재미있게 보냈어요.",
+    "imageUrls": [
+      "/uploads/test.jpg"
+    ],
+    "imageUrl": "/uploads/test.jpg",
+    "id": "story-1788705341837-06rn",
+    "createdAt": "2026-09-06T14:35:41.837Z"
+  },
+  {
     "id": "demo-5",
     "week": "3월 1주차",
     "studentName": "정지후",

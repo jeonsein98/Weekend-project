@@ -18,7 +18,7 @@ import {
   FolderOpen,
   MessageSquare
 } from 'lucide-react';
-import { StoryItem, WEEKS_LIST, RosterStudent, getCurrentWeekString, isWeekMatch } from '../types';
+import { StoryItem, WEEKS_LIST, RosterStudent, getCurrentWeekString, isWeekMatch, getStudentClass } from '../types';
 import { saveDraftToIndexedDB, getDraftFromIndexedDB, clearDraftFromIndexedDB, savePhotoToIndexedDB } from '../lib/idb';
 import { optimizeAndStandardizePhoto } from '../lib/imageOptimizer';
 
@@ -468,9 +468,11 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
     setIsSubmitting(true);
     try {
+      const studentClass = getStudentClass(activeStudentName, roster);
       await onSaveStory({
         id: editingStoryId || undefined,
         week,
+        className: studentClass,
         studentName: activeStudentName,
         parentPin: activeParentPin,
         title: '',

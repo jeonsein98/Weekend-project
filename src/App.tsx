@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { StoryItem, ToastMessage, GasConfig, RosterStudent, getCurrentWeekString, isWeekMatch } from './types';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { StoryItem, ToastMessage, GasConfig, RosterStudent, getCurrentWeekString, isWeekMatch, isClassMatch, getStudentClass } from './types';
 import { Header } from './components/Header';
 import { StoryFormView } from './components/StoryFormView';
 import { SlidePresentationView } from './components/SlidePresentationView';
@@ -28,39 +28,61 @@ import { INITIAL_STORIES } from './lib/defaultData';
 export default function App() {
   const [stories, setStories] = useState<StoryItem[]>(() => getLocalStories());
   const [roster, setRoster] = useState<RosterStudent[]>(() => getRosterList());
-  const [selectedWeek, setSelectedWeek] = useState<string>(() => getCurrentWeekString());
+  // Default to '전체' so both PC and Mobile immediately display all registered stories without filter mismatch
+  const [selectedWeek, setSelectedWeek] = useState<string>('전체');
   const [selectedClass, setSelectedClass] = useState<string>('전체');
   const [currentView, setCurrentView] = useState<'ppt' | 'form' | 'gallery'>('form');
   const [gasConfig, setGasConfig] = useState<GasConfig>({ webAppUrl: '', isConnected: false });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Track if initial sync has occurred
   const isInitialLoadedRef = useRef(false);
 
-  // Load server-side persistent data & roster on mount + background polling for real-time multi-device sync
+  // Toast Helper
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Date.now().toString() + Math.random().toString().slice(2, 5);
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+  };
+
+  // Central real-time server synchronization (Single Source of Truth)
+  const refreshData = useCallback(async (silent = true) => {
+    try {
+      if (!silent) setIsRefreshing(true);
+      const [serverStories, serverRoster] = await Promise.all([
+        fetchStoriesFromServer(),
+        fetchRosterFromServer()
+      ]);
+
+      if (serverStories && Array.isArray(serverStories)) {
+        setStories(serverStories);
+        saveLocalStories(serverStories);
+      }
+      if (serverRoster && Array.isArray(serverRoster) && serverRoster.length > 0) {
+        setRoster(serverRoster);
+      }
+      if (!silent) {
+        showToast('최신 데이터가 성공적으로 동기화되었습니다.', 'success');
+      }
+    } catch (e) {
+      if (!silent) {
+        showToast('동기화 중 오류가 발생했습니다.', 'error');
+      }
+    } finally {
+      if (!silent) setIsRefreshing(false);
+    }
+  }, []);
+
+  // Initial mount load
   useEffect(() => {
     async function loadInitialData() {
       try {
-        const [serverStories, serverRoster] = await Promise.all([
-          fetchStoriesFromServer(),
-          fetchRosterFromServer()
-        ]);
-        if (serverStories && serverStories.length > 0) {
-          setStories(serverStories);
-          // If the initial date-based selectedWeek has 0 stories, automatically select the most active story week so users don't see empty screen
-          const hasMatchInCurrentWeek = serverStories.some(s => isWeekMatch(s.week, selectedWeek));
-          if (!hasMatchInCurrentWeek) {
-            const lastStory = serverStories[serverStories.length - 1];
-            if (lastStory?.week) {
-              setSelectedWeek(lastStory.week);
-            }
-          }
-        }
-        if (serverRoster && serverRoster.length > 0) {
-          setRoster(serverRoster);
-        }
+        await refreshData(true);
 
         // Proactively heal any legacy idb: references in local cache
         healLegacyStories().then((healed) => {
@@ -80,74 +102,37 @@ export default function App() {
     // Load GAS config
     const gasConf = getGasConfig();
     setGasConfig(gasConf);
+  }, [refreshData]);
 
-    // Background polling every 8 seconds so stories submitted by parents on their phones automatically show on the teacher's screen
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch('/api/stories');
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.success && Array.isArray(data.stories)) {
-            setStories((prev) => {
-              const makeKey = (s: StoryItem) =>
-                `${s.studentName.trim().toLowerCase()}_${(s.week || '전체').replace(/\s+/g, '')}`;
-
-              const map = new Map<string, StoryItem>();
-              for (const s of prev) {
-                if (s && s.studentName) {
-                  map.set(makeKey(s), s);
-                }
-              }
-              for (const s of data.stories as StoryItem[]) {
-                if (s && s.studentName) {
-                  const k = makeKey(s);
-                  const existing = map.get(k);
-                  if (!existing) {
-                    map.set(k, s);
-                  } else {
-                    const exPhotos = (existing.imageUrls || []).filter(
-                      (u: string) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
-                    );
-                    const newPhotos = (s.imageUrls || []).filter(
-                      (u: string) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
-                    );
-                    const bestPhotos = newPhotos.length >= exPhotos.length ? newPhotos : exPhotos;
-                    const cleanCover = (s.imageUrl && !s.imageUrl.startsWith('idb:'))
-                      ? s.imageUrl
-                      : ((existing.imageUrl && !existing.imageUrl.startsWith('idb:')) ? existing.imageUrl : (bestPhotos[0] || ''));
-                    const merged: StoryItem = {
-                      ...existing,
-                      ...s,
-                      id: s.id || existing.id,
-                      imageUrls: bestPhotos.length > 0 ? bestPhotos : (existing.imageUrls || []).filter(u => typeof u === 'string' && !u.startsWith('idb:')),
-                      imageUrl: bestPhotos[0] || cleanCover
-                    };
-                    map.set(k, merged);
-                  }
-                }
-              }
-              const finalStories = Array.from(map.values());
-              saveLocalStories(finalStories);
-              return finalStories;
-            });
-          }
-        }
-      } catch (err) {
-        // Silent polling error
-      }
-    }, 8000);
-
+  // Fast background polling every 4 seconds to guarantee real-time multi-device sync
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshData(true);
+    }, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [refreshData]);
 
-  // Toast Helper
-  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
-    const id = Date.now().toString() + Math.random().toString().slice(2, 5);
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4500);
-  };
+  // Re-fetch immediately whenever user switches view/tabs (e.g. from form to presentation)
+  useEffect(() => {
+    if (isInitialLoadedRef.current) {
+      refreshData(true);
+    }
+  }, [currentView, refreshData]);
+
+  // Re-fetch immediately when browser tab regains focus or visibility
+  useEffect(() => {
+    const handleSyncOnVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refreshData(true);
+      }
+    };
+    window.addEventListener('focus', handleSyncOnVisible);
+    document.addEventListener('visibilitychange', handleSyncOnVisible);
+    return () => {
+      window.removeEventListener('focus', handleSyncOnVisible);
+      document.removeEventListener('visibilitychange', handleSyncOnVisible);
+    };
+  }, [refreshData]);
 
   const handleDismissToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -217,6 +202,12 @@ export default function App() {
         };
       }
     }
+
+    const studentClass = (storyData as any).className || getStudentClass(storyData.studentName, roster);
+    savedStory = {
+      ...savedStory,
+      className: studentClass
+    };
 
     // Persist to server (converts images to permanent disk files)
     const result = await saveStoryToServer(savedStory);
@@ -295,10 +286,12 @@ export default function App() {
         gasConfig={gasConfig}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenAdmin={() => setIsAdminModalOpen(true)}
+        onRefresh={() => refreshData(false)}
+        isRefreshing={isRefreshing}
         storyCount={stories.filter((s) => {
           const matchWeek = selectedWeek === '전체' || isWeekMatch(s.week, selectedWeek);
-          const stClass = roster.find(r => r.name.trim().toLowerCase() === s.studentName.trim().toLowerCase())?.className || '은솔1반';
-          const matchClass = selectedClass === '전체' || stClass === selectedClass;
+          const stClass = getStudentClass(s.studentName, roster, s);
+          const matchClass = selectedClass === '전체' || isClassMatch(stClass, selectedClass);
           return matchWeek && matchClass;
         }).length}
       />

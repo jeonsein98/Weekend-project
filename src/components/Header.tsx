@@ -1,5 +1,5 @@
 import React from 'react';
-import { Presentation, PenTool, LayoutGrid, Settings, Sparkles, Database, ShieldCheck } from 'lucide-react';
+import { Presentation, PenTool, LayoutGrid, Settings, Sparkles, Database, ShieldCheck, RefreshCw } from 'lucide-react';
 import { WEEKS_LIST, GasConfig, RosterStudent } from '../types';
 
 interface HeaderProps {
@@ -14,6 +14,8 @@ interface HeaderProps {
   onOpenSettings: () => void;
   onOpenAdmin: () => void;
   storyCount: number;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -27,7 +29,9 @@ export const Header: React.FC<HeaderProps> = ({
   gasConfig,
   onOpenSettings,
   onOpenAdmin,
-  storyCount
+  storyCount,
+  onRefresh,
+  isRefreshing = false
 }) => {
   const availableClasses = Array.from(
     new Set([
@@ -155,6 +159,20 @@ export const Header: React.FC<HeaderProps> = ({
                 </svg>
               </div>
             </div>
+
+            {/* Instant Server Sync Button */}
+            {onRefresh && (
+              <button
+                id="header-refresh-btn"
+                onClick={onRefresh}
+                disabled={isRefreshing}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-full border border-[#E8E4D9] bg-white text-[#2D2A26] hover:bg-[#F5F2ED] text-xs font-bold transition-all shadow-xs shrink-0 min-h-[38px] active:scale-95 disabled:opacity-50 cursor-pointer"
+                title="PC/모바일 실시간 데이터 강제 새로고침"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-[#5A7269] ${isRefreshing ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">동기화</span>
+              </button>
+            )}
 
             {/* Admin Management Button */}
             <button

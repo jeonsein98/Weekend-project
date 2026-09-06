@@ -14,6 +14,15 @@ const PORT = 3000;
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
+// Aggressive anti-caching headers for all API routes to ensure real-time cross-platform synchronization
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  next();
+});
+
 // Persistent Storage Directories
 const DATA_DIR = path.join(process.cwd(), 'data');
 const STORIES_FILE = path.join(DATA_DIR, 'stories.json');
@@ -88,6 +97,71 @@ const BANNED_MOCK_STORY_IDS = new Set([
   'story-eunsol'
 ]);
 
+function getCanonicalWeekKey(weekStr?: string): string {
+  if (!weekStr) return '';
+  const clean = weekStr.replace(/\s+/g, '').toLowerCase().trim();
+  if (clean === '전체' || clean === 'all') return 'all';
+
+  if (clean.includes('방학지낸이야기') || clean.includes('방학이야기')) {
+    if (clean.includes('2월') || clean.includes('2/')) return 'w_2_1';
+    return 'w_9_1';
+  }
+
+  const dateRangeMatch = clean.match(/(\d+)[\/\.\-](\d+)~(\d+)[\/\.\-](\d+)/);
+  if (dateRangeMatch) {
+    const m = parseInt(dateRangeMatch[1], 10);
+    const d = parseInt(dateRangeMatch[2], 10);
+    if (m === 9) {
+      if (d <= 9) return 'w_9_1';
+      if (d <= 16) return 'w_9_2';
+      if (d <= 23) return 'w_9_3';
+      return 'w_9_4';
+    }
+    if (m === 10) {
+      if (d <= 7) return 'w_10_1';
+      if (d <= 14) return 'w_10_2';
+      if (d <= 21) return 'w_10_3';
+      if (d <= 28) return 'w_10_4';
+      return 'w_10_5';
+    }
+    if (m === 11) {
+      if (d <= 10) return 'w_11_1';
+      if (d <= 17) return 'w_11_2';
+      if (d <= 24) return 'w_11_3';
+      return 'w_11_4';
+    }
+    if (m === 12) {
+      if (d <= 8) return 'w_12_1';
+      if (d <= 15) return 'w_12_2';
+      if (d <= 22) return 'w_12_3';
+      return 'w_12_4';
+    }
+    if (m === 1) {
+      if (d <= 5) return 'w_1_1';
+      if (d <= 12) return 'w_1_2';
+      if (d <= 19) return 'w_1_3';
+      if (d <= 26) return 'w_1_4';
+      return 'w_1_5';
+    }
+    if (m === 2) {
+      return 'w_2_1';
+    }
+    if (m === 3) {
+      if (d <= 10) return 'w_3_1';
+      if (d <= 17) return 'w_3_2';
+      if (d <= 24) return 'w_3_3';
+      return 'w_3_4';
+    }
+  }
+
+  const mwMatch = clean.match(/(\d+)월\s*(\d+)주차?/);
+  if (mwMatch) {
+    return `w_${mwMatch[1]}_${mwMatch[2]}`;
+  }
+
+  return clean.replace(/[\(\)\[\]（）]/g, '');
+}
+
 function isWeekMatch(weekA?: string, weekB?: string): boolean {
   if (!weekA || !weekB) return false;
   if (weekA === '전체' || weekB === '전체' || weekA === 'all' || weekB === 'all') return true;
@@ -96,16 +170,9 @@ function isWeekMatch(weekA?: string, weekB?: string): boolean {
   const cleanB = weekB.replace(/\s+/g, '').trim();
   if (cleanA === cleanB) return true;
 
-  const extractWeekToken = (str: string): string | null => {
-    const match = str.match(/(\d+월\s*\d+주차)/);
-    return match ? match[1].replace(/\s+/g, '') : null;
-  };
-
-  const tokenA = extractWeekToken(cleanA);
-  const tokenB = extractWeekToken(cleanB);
-  if (tokenA && tokenB && tokenA === tokenB) return true;
-  if (tokenA && cleanB.includes(tokenA)) return true;
-  if (tokenB && cleanA.includes(tokenB)) return true;
+  const canonA = getCanonicalWeekKey(cleanA);
+  const canonB = getCanonicalWeekKey(cleanB);
+  if (canonA && canonB && canonA === canonB) return true;
 
   const strippedA = cleanA.replace(/[\(\)\[\]（）]/g, '');
   const strippedB = cleanB.replace(/[\(\)\[\]（）]/g, '');
@@ -550,6 +617,14 @@ app.post('/api/stories', (req, res) => {
 
       const currentStories = readStories();
       const processedStory = processStoryImages(storyData);
+      
+      // Ensure className is explicitly set on story
+      if (!processedStory.className || processedStory.className === '전체') {
+        const roster = readRoster();
+        const studentMatch = roster.find((r: any) => r.name && r.name.trim().toLowerCase() === (processedStory.studentName || '').trim().toLowerCase());
+        processedStory.className = studentMatch?.className?.trim() || '은솔1반';
+      }
+
       let updatedStories: any[];
       let returnStory: any;
 

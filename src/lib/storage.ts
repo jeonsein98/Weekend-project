@@ -1,4 +1,4 @@
-import { StoryItem, GasConfig, RosterStudent, isWeekMatch, isClassMatch, getStudentClass } from '../types';
+import { StoryItem, GasConfig, RosterStudent, isWeekMatch, isClassMatch, getStudentClass, getCanonicalWeekKey } from '../types';
 import { INITIAL_STORIES } from './defaultData';
 import {
   saveStoryToIndexedDB,
@@ -74,8 +74,8 @@ export function ensureRosterOrder(list: RosterStudent[]): RosterStudent[] {
 }
 
 function normalizeWeek(week?: string): string {
-  if (!week) return '전체';
-  return week.replace(/\s+/g, '');
+  if (!week) return 'all';
+  return getCanonicalWeekKey(week) || week.replace(/\s+/g, '');
 }
 
 export function cleanupLegacyLocalStorage(): void {
@@ -145,10 +145,17 @@ export async function fetchStoriesFromServer(options?: { week?: string; classNam
     const params = new URLSearchParams();
     if (options?.week && options.week !== '전체') params.append('week', options.week);
     if (options?.className && options.className !== '전체') params.append('class', options.className);
-    const queryString = params.toString();
-    const fetchUrl = queryString ? `/api/stories?${queryString}` : '/api/stories';
+    params.append('_t', Date.now().toString());
+    const fetchUrl = `/api/stories?${params.toString()}`;
 
-    const res = await fetch(fetchUrl);
+    const res = await fetch(fetchUrl, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
+    });
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.stories)) {
