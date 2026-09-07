@@ -259,11 +259,98 @@ function isSameStudentAndWeek(name1?: string, week1?: string, name2?: string, we
 // In-Memory cache initialized with canonical registered stories from 9/5~9/6
 let memoryStoriesCache: any[] = [...DEFAULT_INITIAL_STORIES];
 
-// External Cloud DB Configurations
-const VERCEL_KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const VERCEL_KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+// External Central Storage Configuration Cache
+const CLOUD_CONFIG_FILE = path.join(DATA_DIR, 'cloud_config.json');
+
+interface CloudStorageSettings {
+  supabaseUrl?: string;
+  supabaseKey?: string;
+  supabaseBucket?: string;
+  gasWebAppUrl?: string;
+  kvRestApiUrl?: string;
+  kvRestApiToken?: string;
+}
+
+let cloudConfigMemory: CloudStorageSettings = {};
+
+function readCloudConfig(): CloudStorageSettings {
+  try {
+    if (fs.existsSync(CLOUD_CONFIG_FILE)) {
+      const raw = fs.readFileSync(CLOUD_CONFIG_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        cloudConfigMemory = { ...cloudConfigMemory, ...parsed };
+      }
+    }
+  } catch {}
+  return cloudConfigMemory;
+}
+
+function writeCloudConfig(cfg: Partial<CloudStorageSettings>): boolean {
+  try {
+    cloudConfigMemory = { ...cloudConfigMemory, ...cfg };
+    fs.writeFileSync(CLOUD_CONFIG_FILE, JSON.stringify(cloudConfigMemory, null, 2), 'utf-8');
+    return true;
+  } catch {
+    try {
+      fs.writeFileSync(path.join('/tmp', 'cloud_config.json'), JSON.stringify(cloudConfigMemory, null, 2), 'utf-8');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// Universal Config Resolvers supporting all standard environment variable variations and dynamic UI settings
+function getSupabaseConfig() {
+  const dynamic = readCloudConfig();
+  const url = process.env.SUPABASE_URL ||
+              process.env.NEXT_PUBLIC_SUPABASE_URL ||
+              process.env.VITE_SUPABASE_URL ||
+              process.env.REACT_APP_SUPABASE_URL ||
+              dynamic.supabaseUrl || '';
+  const key = process.env.SUPABASE_KEY ||
+              process.env.SUPABASE_SERVICE_ROLE_KEY ||
+              process.env.SUPABASE_ANON_KEY ||
+              process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+              process.env.VITE_SUPABASE_ANON_KEY ||
+              dynamic.supabaseKey || '';
+  const bucket = process.env.SUPABASE_STORAGE_BUCKET ||
+                 dynamic.supabaseBucket || 'stories';
+  return {
+    url: (url || '').trim().replace(/\/+$/, ''),
+    key: (key || '').trim(),
+    bucket: (bucket || 'stories').trim(),
+    isConfigured: !!(url && key)
+  };
+}
+
+function getGasConfig() {
+  const fileConf = readGasConfig();
+  const dynamic = readCloudConfig();
+  const url = process.env.GAS_WEB_APP_URL ||
+              dynamic.gasWebAppUrl ||
+              (fileConf.isConnected && fileConf.webAppUrl ? fileConf.webAppUrl : '');
+  return {
+    url: (url || '').trim(),
+    isConnected: !!(url && url.startsWith('http'))
+  };
+}
+
+function getKvConfig() {
+  const dynamic = readCloudConfig();
+  const url = process.env.KV_REST_API_URL ||
+              process.env.UPSTASH_REDIS_REST_URL ||
+              dynamic.kvRestApiUrl || '';
+  const token = process.env.KV_REST_API_TOKEN ||
+                process.env.UPSTASH_REDIS_REST_TOKEN ||
+                dynamic.kvRestApiToken || '';
+  return {
+    url: (url || '').trim(),
+    token: (token || '').trim(),
+    isConfigured: !!(url && token)
+  };
+}
 
 // Safe local filesystem read
 function readLocalDiskStories(): any[] {
@@ -303,7 +390,6 @@ function writeLocalDiskStories(stories: any[]): boolean {
       fs.writeFileSync(STORIES_BACKUP_FILE, jsonStr, 'utf-8');
     } catch {}
   } catch (err) {
-    // EROFS or permission error on serverless/Vercel: write to /tmp
     try {
       fs.writeFileSync(path.join('/tmp', 'stories.json'), jsonStr, 'utf-8');
       saved = true;
@@ -312,13 +398,60 @@ function writeLocalDiskStories(stories: any[]): boolean {
   return saved;
 }
 
-// Primary External Cloud Database fetcher
+// Primary External Cloud Database fetcher (Guarantees PC & Mobile share exact single source of truth)
 async function readExternalStories(): Promise<any[]> {
-  // 1. Vercel KV / Upstash Redis
-  if (VERCEL_KV_URL && VERCEL_KV_TOKEN) {
+  const sb = getSupabaseConfig();
+  const kv = getKvConfig();
+  const gas = getGasConfig();
+
+  // 1. Supabase REST API
+  if (sb.isConfigured) {
     try {
-      const res = await fetch(`${VERCEL_KV_URL}/get/stories`, {
-        headers: { Authorization: `Bearer ${VERCEL_KV_TOKEN}` }
+      // First try standard 'stories' relational table
+      const res = await fetch(`${sb.url}/rest/v1/stories?select=*&order=createdAt.desc`, {
+        headers: {
+          apikey: sb.key,
+          Authorization: `Bearer ${sb.key}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const valid = data.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
+          if (valid.length > 0) {
+            memoryStoriesCache = normalizeStoryImages(valid);
+            return memoryStoriesCache;
+          }
+        }
+      } else if (res.status === 404) {
+        // Fallback: Check if stored in 'app_state' key-value table
+        const kvRes = await fetch(`${sb.url}/rest/v1/app_state?key=eq.stories&select=*`, {
+          headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}` }
+        });
+        if (kvRes.ok) {
+          const kvData = await kvRes.json();
+          if (Array.isArray(kvData) && kvData[0] && kvData[0].value) {
+            const parsed = typeof kvData[0].value === 'string' ? JSON.parse(kvData[0].value) : kvData[0].value;
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const valid = parsed.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
+              if (valid.length > 0) {
+                memoryStoriesCache = normalizeStoryImages(valid);
+                return memoryStoriesCache;
+              }
+            }
+          }
+        }
+      }
+    } catch (sbErr) {
+      console.warn('[Storage] Supabase fetch warning:', sbErr);
+    }
+  }
+
+  // 2. Vercel KV / Upstash Redis
+  if (kv.isConfigured) {
+    try {
+      const res = await fetch(`${kv.url}/get/stories`, {
+        headers: { Authorization: `Bearer ${kv.token}` }
       });
       if (res.ok) {
         const data = await res.json();
@@ -327,26 +460,21 @@ async function readExternalStories(): Promise<any[]> {
           if (Array.isArray(parsed) && parsed.length > 0) {
             const valid = parsed.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
             if (valid.length > 0) {
-              memoryStoriesCache = valid;
-              return valid;
+              memoryStoriesCache = normalizeStoryImages(valid);
+              return memoryStoriesCache;
             }
           }
         }
-        // If KV is currently empty, seed it with DEFAULT_INITIAL_STORIES
-        await writeExternalStories(DEFAULT_INITIAL_STORIES);
-        return DEFAULT_INITIAL_STORIES;
       }
     } catch (kvErr) {
-      console.warn('Vercel KV fetch warning:', kvErr);
+      console.warn('[Storage] Vercel KV fetch warning:', kvErr);
     }
   }
 
-  // 2. Google Sheets / Apps Script Web App
-  const gasConf = readGasConfig();
-  const gasUrl = process.env.GAS_WEB_APP_URL || (gasConf.isConnected && gasConf.webAppUrl ? gasConf.webAppUrl : '');
-  if (gasUrl && gasUrl.startsWith('http')) {
+  // 3. Google Sheets / Apps Script Web App
+  if (gas.isConnected) {
     try {
-      const res = await fetch(`${gasUrl}?action=get`, {
+      const res = await fetch(`${gas.url}?action=get`, {
         headers: { 'Cache-Control': 'no-cache' }
       });
       if (res.ok) {
@@ -354,41 +482,22 @@ async function readExternalStories(): Promise<any[]> {
         if (data && Array.isArray(data.stories) && data.stories.length > 0) {
           const valid = data.stories.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
           if (valid.length > 0) {
-            memoryStoriesCache = valid;
-            return valid;
+            memoryStoriesCache = normalizeStoryImages(valid);
+            return memoryStoriesCache;
           }
         }
       }
     } catch (gasErr) {
-      console.warn('Google Sheets fetch warning:', gasErr);
+      console.warn('[Storage] Google Sheets fetch warning:', gasErr);
     }
   }
 
-  // 3. Supabase REST API
-  if (SUPABASE_URL && SUPABASE_KEY) {
-    try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/stories?select=*`, {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          const valid = data.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
-          if (valid.length > 0) {
-            memoryStoriesCache = valid;
-            return valid;
-          }
-        }
-      }
-    } catch (sbErr) {
-      console.warn('Supabase fetch warning:', sbErr);
-    }
+  // 4. In-memory cache
+  if (memoryStoriesCache && memoryStoriesCache.length > 0) {
+    return normalizeStoryImages(memoryStoriesCache);
   }
 
-  // 4. Local disk / memory cache fallback
+  // 5. Local disk / memory cache fallback
   const disk = readLocalDiskStories();
   if (disk && disk.length > 0) {
     memoryStoriesCache = normalizeStoryImages(disk);
@@ -439,50 +548,65 @@ function normalizeStoryImages(stories: any[]): any[] {
 // Primary External Cloud Database persister
 async function writeExternalStories(stories: any[]): Promise<boolean> {
   const cleanStories = stories.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
-  memoryStoriesCache = cleanStories;
+  const normalized = normalizeStoryImages(cleanStories);
+  memoryStoriesCache = normalized;
 
-  // 1. Persist to local disk / /tmp safe storage
-  writeLocalDiskStories(cleanStories);
+  // 1. Local disk / /tmp safe storage as background safety net
+  writeLocalDiskStories(normalized);
 
-  // 2. Persist to Vercel KV / Upstash Redis
-  if (VERCEL_KV_URL && VERCEL_KV_TOKEN) {
-    try {
-      await fetch(`${VERCEL_KV_URL}/set/stories`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${VERCEL_KV_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(cleanStories)
-      });
-    } catch (kvErr) {
-      console.warn('Vercel KV write error:', kvErr);
-    }
-  }
+  const sb = getSupabaseConfig();
+  const kv = getKvConfig();
+  const gas = getGasConfig();
 
-  // 3. Persist to Google Sheets in background
-  const gasConf = readGasConfig();
-  const gasUrl = process.env.GAS_WEB_APP_URL || (gasConf.isConnected && gasConf.webAppUrl ? gasConf.webAppUrl : '');
-  if (gasUrl && gasUrl.startsWith('http')) {
-    fetch(gasUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'sync_all', stories: cleanStories })
-    }).catch((gErr) => console.warn('GAS sync error:', gErr));
-  }
-
-  // 4. Persist to Supabase in background
-  if (SUPABASE_URL && SUPABASE_KEY) {
-    fetch(`${SUPABASE_URL}/rest/v1/stories`, {
+  // 2. Persist to Supabase
+  if (sb.isConfigured) {
+    // Attempt upsert to 'stories' table
+    fetch(`${sb.url}/rest/v1/stories`, {
       method: 'POST',
       headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
+        apikey: sb.key,
+        Authorization: `Bearer ${sb.key}`,
         'Content-Type': 'application/json',
         Prefer: 'resolution=merge-duplicates'
       },
-      body: JSON.stringify(cleanStories)
-    }).catch((sbErr) => console.warn('Supabase write error:', sbErr));
+      body: JSON.stringify(normalized)
+    }).catch(async (sbErr) => {
+      console.warn('[Storage] Supabase stories table write warning:', sbErr);
+      // Fallback: write snapshot to app_state table
+      try {
+        await fetch(`${sb.url}/rest/v1/app_state`, {
+          method: 'POST',
+          headers: {
+            apikey: sb.key,
+            Authorization: `Bearer ${sb.key}`,
+            'Content-Type': 'application/json',
+            Prefer: 'resolution=merge-duplicates'
+          },
+          body: JSON.stringify({ key: 'stories', value: normalized, updatedAt: new Date().toISOString() })
+        });
+      } catch {}
+    });
+  }
+
+  // 3. Persist to Vercel KV / Upstash Redis
+  if (kv.isConfigured) {
+    fetch(`${kv.url}/set/stories`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${kv.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(normalized)
+    }).catch((kvErr) => console.warn('[Storage] Vercel KV write error:', kvErr));
+  }
+
+  // 4. Persist to Google Sheets in background
+  if (gas.isConnected) {
+    fetch(gas.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'sync_all', stories: normalized })
+    }).catch((gErr) => console.warn('[Storage] GAS sync error:', gErr));
   }
 
   return true;
@@ -575,10 +699,8 @@ function withStoryLock<T>(fn: () => Promise<T> | T): Promise<T> {
 
 // 1. Supabase Storage Uploader
 async function uploadToSupabaseStorage(base64Str: string, prefix = 'photo'): Promise<string | null> {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const bucket = process.env.SUPABASE_STORAGE_BUCKET || 'stories';
-  if (!supabaseUrl || !supabaseKey) return null;
+  const sb = getSupabaseConfig();
+  if (!sb.isConfigured) return null;
 
   try {
     const commaIdx = base64Str.indexOf(',');
@@ -594,14 +716,14 @@ async function uploadToSupabaseStorage(base64Str: string, prefix = 'photo'): Pro
     const buffer = Buffer.from(rawData, 'base64');
     const safePrefix = (prefix || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
     const filename = `${safePrefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
-    const cleanBaseUrl = supabaseUrl.replace(/\/+$/, '');
-    const uploadUrl = `${cleanBaseUrl}/storage/v1/object/${bucket}/${filename}`;
+    const cleanBaseUrl = sb.url.replace(/\/+$/, '');
+    const uploadUrl = `${cleanBaseUrl}/storage/v1/object/${sb.bucket}/${filename}`;
 
     const res = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
-        'apikey': supabaseKey,
+        'Authorization': `Bearer ${sb.key}`,
+        'apikey': sb.key,
         'Content-Type': mime,
         'x-upsert': 'true'
       },
@@ -609,7 +731,7 @@ async function uploadToSupabaseStorage(base64Str: string, prefix = 'photo'): Pro
     });
 
     if (res.ok) {
-      return `${cleanBaseUrl}/storage/v1/object/public/${bucket}/${filename}`;
+      return `${cleanBaseUrl}/storage/v1/object/public/${sb.bucket}/${filename}`;
     }
   } catch (err) {
     console.warn('[Storage] Supabase Storage upload error:', err);
@@ -714,27 +836,7 @@ async function uploadToExternalStorageOrBase64(base64Str: string, prefix = 'phot
   const imgbbUrl = await uploadToImgBB(base64Str, prefix);
   if (imgbbUrl) return imgbbUrl;
 
-  // 4. Background mirror to local disk if directory is writable (for local dev inspection)
-  try {
-    const commaIdx = base64Str.indexOf(',');
-    if (commaIdx !== -1) {
-      const header = base64Str.substring(0, commaIdx);
-      const rawData = base64Str.substring(commaIdx + 1);
-      let ext = 'jpg';
-      if (header.includes('image/png')) ext = 'png';
-      else if (header.includes('image/webp')) ext = 'webp';
-      const buffer = Buffer.from(rawData, 'base64');
-      const safePrefix = (prefix || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
-      const filename = `${safePrefix}_${Date.now()}.${ext}`;
-
-      [UPLOADS_DIR, DATA_UPLOADS_DIR].forEach((d) => {
-        if (!fs.existsSync(d)) try { fs.mkdirSync(d, { recursive: true }); } catch {}
-        try { fs.writeFileSync(path.join(d, filename), buffer); } catch {}
-      });
-    }
-  } catch {}
-
-  // 5. Return the permanent, self-contained Base64 data URL.
+  // 4. Return the permanent, self-contained Base64 data URL.
   // It is persisted inside the story record, guaranteeing 100% survival across Vercel cold restarts!
   return base64Str;
 }
@@ -982,8 +1084,13 @@ app.post('/api/gemini-caption-recommendation', async (req, res) => {
 // --- Persistent Stories & Photo APIs ---
 
 // 1. Get stories (supports optional query filters: week, class, selectedWeek, selectedClass)
+// Strictly delivers the centralized Single Source of Truth to PC, mobile, and tablet
 app.get('/api/stories', async (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
     let stories = await readExternalStories();
     const weekQuery = (req.query.week || req.query.selectedWeek) as string | undefined;
     const classQuery = (req.query.class || req.query.className || req.query.selectedClass) as string | undefined;
@@ -1110,7 +1217,7 @@ app.post('/api/stories/:id/reaction', (req, res) => {
 });
 
 // 5. Bulk sync & recovery (pulls client offline/local storage data onto server)
-app.post('/api/stories/bulk-sync', (req, res) => {
+app.post(['/api/stories/bulk-sync', '/api/stories/sync'], (req, res) => {
   return withStoryLock(async () => {
     try {
       const { stories: clientStories } = req.body;
@@ -1335,6 +1442,50 @@ app.post('/api/gas-config', (req, res) => {
       writeGasConfig(config);
     }
     return res.json({ success: true, config: readGasConfig() });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Central Cloud Storage Configuration Endpoints (Supabase / KV / Sheets)
+app.get(['/api/cloud-config', '/api/config/cloud'], (_req, res) => {
+  const sb = getSupabaseConfig();
+  const kv = getKvConfig();
+  const gas = getGasConfig();
+  res.json({
+    success: true,
+    config: {
+      supabase: {
+        isConfigured: sb.isConfigured,
+        url: sb.url ? sb.url.replace(/https?:\/\//, '').slice(0, 15) + '...' : '',
+        bucket: sb.bucket
+      },
+      kv: {
+        isConfigured: kv.isConfigured
+      },
+      gas: {
+        isConfigured: gas.isConnected,
+        url: gas.url ? gas.url.slice(0, 30) + '...' : ''
+      }
+    }
+  });
+});
+
+app.post(['/api/cloud-config', '/api/config/cloud'], async (req, res) => {
+  try {
+    const { supabaseUrl, supabaseKey, supabaseBucket, gasWebAppUrl, kvRestApiUrl, kvRestApiToken } = req.body || {};
+    writeCloudConfig({
+      supabaseUrl,
+      supabaseKey,
+      supabaseBucket,
+      gasWebAppUrl,
+      kvRestApiUrl,
+      kvRestApiToken
+    });
+    // Immediately attempt to sync current stories to the new external store
+    const current = await readExternalStories();
+    await writeExternalStories(current);
+    return res.json({ success: true, message: '클라우드 저장소 설정이 성공적으로 저장되었습니다.' });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err.message });
   }

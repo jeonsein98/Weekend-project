@@ -128,8 +128,11 @@ export async function fetchStoriesFromServer(options?: { week?: string; classNam
   const doFetch = async () => {
     const res = await fetch(fetchUrl, {
       method: 'GET',
+      cache: 'no-store',
       headers: {
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
       }
     });
     if (!res.ok) {
@@ -180,16 +183,40 @@ export async function fetchStoriesFromServer(options?: { week?: string; classNam
             imageUrls: urls.length > 0 ? urls : (finalPrimary ? [finalPrimary] : [])
           };
         });
-      if (cleanStories.length > 0) {
-        memoryStoriesCache = cleanStories;
-        return cleanStories;
-      }
+
+      // Synchronize in-memory cache directly with authoritative server response
+      memoryStoriesCache = cleanStories;
+      return cleanStories;
     }
   } catch (err: any) {
     console.warn('[Storage] Fetch stories from server warning (retaining cached stories):', err?.message || err);
   }
 
   return memoryStoriesCache.length > 0 ? memoryStoriesCache : INITIAL_STORIES;
+}
+
+/**
+ * Synchronize local stories with the central server external storage.
+ * Merges client data onto server external storage and returns authoritative merged list.
+ */
+export async function syncStoriesWithServer(storiesToSync: StoryItem[]): Promise<StoryItem[]> {
+  try {
+    const res = await fetch('/api/stories/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stories: storiesToSync })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.stories)) {
+        memoryStoriesCache = data.stories;
+        return data.stories;
+      }
+    }
+  } catch (e) {
+    console.warn('[Storage] Sync with server warning:', e);
+  }
+  return memoryStoriesCache;
 }
 
 /**

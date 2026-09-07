@@ -61,7 +61,7 @@ export default function App() {
         fetchRosterFromServer()
       ]);
 
-      if (serverStories && Array.isArray(serverStories) && serverStories.length > 0) {
+      if (serverStories && Array.isArray(serverStories)) {
         setStories(serverStories);
       }
       if (serverRoster && Array.isArray(serverRoster) && serverRoster.length > 0) {

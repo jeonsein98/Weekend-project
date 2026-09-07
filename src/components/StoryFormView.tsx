@@ -275,12 +275,12 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
             });
             if (uploadRes.ok) {
               const uploadData = await uploadRes.json();
-              if (uploadData.url) {
+              if (uploadData.url && (uploadData.url.startsWith('http://') || uploadData.url.startsWith('https://'))) {
                 const serverUrl = uploadData.url;
                 // Cache local dataUrl as fallback
                 previewMapRef.current.set(serverUrl, dataUrl);
 
-                // Seamlessly swap temporary preview dataUrl with permanent server URL
+                // Seamlessly swap temporary preview dataUrl with permanent external cloud URL
                 setImageUrls((prev) =>
                   prev.map((item) => (item === dataUrl ? serverUrl : item))
                 );

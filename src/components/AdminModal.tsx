@@ -416,7 +416,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
           if (uploadRes.ok) {
             const upJson = await uploadRes.json();
-            if (upJson.url) {
+            if (upJson.url && (upJson.url.startsWith('http://') || upJson.url.startsWith('https://'))) {
               proxyPreviewMapRef.current.set(upJson.url, dataUrl);
               await savePhotoToIndexedDB(upJson.url, dataUrl);
               newUrls.push(upJson.url);
