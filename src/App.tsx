@@ -28,7 +28,7 @@ import {
 import { INITIAL_STORIES } from './lib/defaultData';
 
 export default function App() {
-  const [stories, setStories] = useState<StoryItem[]>([]);
+  const [stories, setStories] = useState<StoryItem[]>(() => INITIAL_STORIES);
   const [roster, setRoster] = useState<RosterStudent[]>(() => getRosterList());
   // Default to '전체' so both PC and Mobile immediately display all registered stories without filter mismatch
   const [selectedWeek, setSelectedWeek] = useState<string>('전체');
@@ -61,7 +61,7 @@ export default function App() {
         fetchRosterFromServer()
       ]);
 
-      if (serverStories && Array.isArray(serverStories)) {
+      if (serverStories && Array.isArray(serverStories) && serverStories.length > 0) {
         setStories(serverStories);
       }
       if (serverRoster && Array.isArray(serverRoster) && serverRoster.length > 0) {
