@@ -81,65 +81,40 @@ function normalizeWeek(week?: string): string {
 export function cleanupLegacyLocalStorage(): void {
   if (typeof window === 'undefined' || !window.localStorage) return;
   try {
-    const keysToRemove: string[] = [];
+    const keysToRemove = [
+      'es_stories_v3',
+      'es_stories_v2',
+      'es_stories',
+      'kindergarten_offline_stories',
+      'classgram_stories',
+      'kindergarten_stories',
+      'weekend_stories_backup'
+    ];
+    keysToRemove.forEach((k) => {
+      try { localStorage.removeItem(k); } catch {}
+    });
+
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (!key) continue;
       if (
-        key.startsWith('kindergarten_offline_stories') ||
-        key.startsWith('classgram_stories') ||
-        key === 'kindergarten_stories' ||
-        key === 'weekend_stories_backup'
+        key.startsWith('story_cache_') ||
+        key.startsWith('offline_stories_') ||
+        key.startsWith('kindergarten_offline_') ||
+        key.startsWith('classgram_')
       ) {
-        keysToRemove.push(key);
-      } else {
-        const val = localStorage.getItem(key);
-        if (val && val.length > 1024 * 300 && val.includes('data:image/')) {
-          keysToRemove.push(key);
-        }
+        try { localStorage.removeItem(key); } catch {}
       }
     }
-    keysToRemove.forEach((k) => localStorage.removeItem(k));
   } catch {}
 }
 
 /**
- * Fetch stories from persistent server storage.
- * Non-destructive bidirectional merge with client storage and IndexedDB.
- * Guarantees zero data loss even across device resets or network drops.
+ * Fetch stories from persistent server storage (Single Source of Truth).
+ * All devices (PC, mobile, tablet) read directly from /api/stories with anti-cache headers.
  */
 export async function fetchStoriesFromServer(options?: { week?: string; className?: string }): Promise<StoryItem[]> {
   cleanupLegacyLocalStorage();
-
-  // Retrieve local caches (localStorage and IndexedDB)
-  const localStories = getLocalStories().filter(s => !BANNED_MOCK_STORY_IDS.has(s.id));
-  let idbStories: StoryItem[] = [];
-  try {
-    idbStories = (await getAllStoriesFromIndexedDB()).filter(s => !BANNED_MOCK_STORY_IDS.has(s.id));
-  } catch (idbErr) {
-    console.warn('[Storage] IDB read skipped:', idbErr);
-  }
-
-  const makeStoryKey = (s: StoryItem) =>
-    `${s.studentName.trim().toLowerCase()}_${normalizeWeek(s.week)}`;
-
-  // Aggregate all known client stories - Single key mapping to prevent duplicates
-  const clientMap = new Map<string, StoryItem>();
-  const addOrUpdateClient = (s: StoryItem) => {
-    if (!s || !s.studentName || BANNED_MOCK_STORY_IDS.has(s.id)) return;
-    const key = makeStoryKey(s);
-    const existing = clientMap.get(key);
-    const sImgs = (s.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
-    const exImgs = (existing?.imageUrls || []).filter((u: string) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:'));
-    if (!existing || sImgs.length >= exImgs.length) {
-      clientMap.set(key, s);
-    }
-  };
-
-  for (const s of localStories) addOrUpdateClient(s);
-  for (const s of idbStories) addOrUpdateClient(s);
-
-  const allClientStories = Array.from(clientMap.values());
 
   try {
     const params = new URLSearchParams();
@@ -156,150 +131,32 @@ export async function fetchStoriesFromServer(options?: { week?: string; classNam
         'Expires': '0'
       }
     });
+
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.stories)) {
-        let serverStories: StoryItem[] = data.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
-
-        // Intelligent map merge: index all server stories by single canonical student+week key
-        const mergedMap = new Map<string, StoryItem>();
-        for (const s of serverStories) {
-          if (s && s.studentName) {
-            mergedMap.set(makeStoryKey(s), s);
-          }
-        }
-
-        // Merge client stories into mergedMap without dropping permanent server photos
-        for (const cStory of allClientStories) {
-          if (!cStory || !cStory.studentName || BANNED_MOCK_STORY_IDS.has(cStory.id)) continue;
-          const key = makeStoryKey(cStory);
-          const existing = mergedMap.get(key);
-
-          if (!existing) {
-            mergedMap.set(key, cStory);
-          } else {
-            const existingUrls = (existing.imageUrls || []).filter(
-              (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
-            );
-            const clientUrls = (cStory.imageUrls || []).filter(
-              (u: any) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
-            );
-            const bestUrls = existingUrls.length >= clientUrls.length
-              ? existingUrls
-              : (clientUrls.length > 0 ? clientUrls : existingUrls);
-
-            const mergedItem: StoryItem = {
-              ...existing,
-              ...cStory,
-              id: existing.id || cStory.id,
-              title: cStory.title || existing.title,
-              content: cStory.content || existing.content,
-              imageUrls: bestUrls,
-              imageUrl: bestUrls[0] || existing.imageUrl || cStory.imageUrl || ''
-            };
-            mergedMap.set(key, mergedItem);
-          }
-        }
-
-        const mergedList = Array.from(mergedMap.values());
-
-        // Identify any client stories missing from the server or needing upload
-        const needServerSync = mergedList.filter((m) => {
-          const onServer = serverStories.find(
-            s => s.id === m.id || makeStoryKey(s) === makeStoryKey(m)
-          );
-          if (!onServer) return true;
-          const onServerPhotos = (onServer.imageUrls || []).filter(
-            u => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
-          );
-          const mPhotos = (m.imageUrls || []).filter(
-            u => typeof u === 'string' && u.trim().length > 0 && (u.startsWith('data:') || !u.startsWith('idb:'))
-          );
-          return mPhotos.length > onServerPhotos.length;
-        });
-
-        if (needServerSync.length > 0) {
-          try {
-            console.log(`[Storage] Auto-syncing ${needServerSync.length} stories/photos to server disk...`);
-            const syncRes = await fetch('/api/stories/bulk-sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ stories: needServerSync })
-            });
-            if (syncRes.ok) {
-              const syncData = await syncRes.json();
-              if (syncData && syncData.stories) {
-                serverStories = syncData.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
-              }
-            }
-          } catch (syncErr) {
-            console.warn('[Storage] Auto recovery sync non-critical warning:', syncErr);
-          }
-        }
-
-        // Clean each story's imageUrls so that only non-empty, genuine URLs are kept
-        const cleanedList = mergedList.map(item => {
-          const rawUrls = Array.isArray(item.imageUrls) ? item.imageUrls : (item.imageUrl ? [item.imageUrl] : []);
-          const validUrls = rawUrls.filter((u: any) =>
-            typeof u === 'string' &&
-            u.trim().length > 0 &&
-            !u.includes('eunsol_beach_laugh') &&
-            !u.includes('eunsol_sandcastle') &&
-            !u.includes('eunsol_family_sunset')
-          );
-          const cover = validUrls[0] || (
-            typeof item.imageUrl === 'string' &&
-            item.imageUrl.trim().length > 0 &&
-            !item.imageUrl.includes('eunsol_beach_laugh') &&
-            !item.imageUrl.includes('eunsol_sandcastle') &&
-            !item.imageUrl.includes('eunsol_family_sunset')
-              ? item.imageUrl
-              : ''
-          );
-          return {
-            ...item,
-            imageUrls: validUrls,
-            imageUrl: cover
-          };
-        });
-
-        // Cache clean merged data locally and into IndexedDB
-        saveLocalStories(cleanedList);
-        saveAllStoriesToIndexedDB(cleanedList);
-
-        let result = cleanedList;
-        if (options?.week && options.week !== '전체') {
-          result = result.filter(s => isWeekMatch(s.week, options.week));
-        }
-        if (options?.className && options.className !== '전체') {
-          result = result.filter(s => isClassMatch((s as any).className || getStudentClass(s.studentName, [], s), options.className));
-        }
-        return result;
+        const cleanStories: StoryItem[] = data.stories.filter(
+          (s: StoryItem) => s && s.studentName && !BANNED_MOCK_STORY_IDS.has(s.id)
+        );
+        return cleanStories;
       }
     }
   } catch (err) {
-    console.warn('[Storage] Fetch stories from server failed, falling back to local cache:', err);
+    console.error('[Storage] Fetch stories from server failed:', err);
   }
 
-  // Fallback to local storage & IndexedDB
-  let fallback = allClientStories.length > 0 ? allClientStories : getLocalStories();
-  if (options?.week && options.week !== '전체') {
-    fallback = fallback.filter(s => isWeekMatch(s.week, options.week));
-  }
-  if (options?.className && options.className !== '전체') {
-    fallback = fallback.filter(s => isClassMatch((s as any).className || getStudentClass(s.studentName, [], s), options.className));
-  }
-  return fallback;
+  return [];
 }
 
 /**
  * Save or update story on the persistent server.
  * All base64 images will be converted to permanent image files on the server disk.
+ * Returns authoritative story list directly from the server.
  */
-export async function saveStoryToServer(story: StoryItem): Promise<{ success: boolean; story?: StoryItem; stories?: StoryItem[] }> {
+export async function saveStoryToServer(story: StoryItem): Promise<{ success: boolean; story?: StoryItem; stories?: StoryItem[]; error?: string }> {
   let storyToSave = { ...story };
 
-  // 1. If story contains any raw base64 images, proactively upload them to disk first
+  // 1. If story contains any raw base64 images, proactively upload them to server disk first
   if (Array.isArray(storyToSave.imageUrls) && storyToSave.imageUrls.some(u => typeof u === 'string' && u.startsWith('data:'))) {
     try {
       const uploadedUrls = await Promise.all(
@@ -361,75 +218,54 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
     storyToSave.imageUrl = storyToSave.imageUrls[0] || '';
   }
 
-  // Update local cache and IndexedDB
-  const localList = getLocalStories();
-  const makeStoryKey = (s: { studentName: string; week?: string }) =>
-    `${s.studentName.trim().toLowerCase()}_${normalizeWeek(s.week)}`;
-
-  const existingIdx = localList.findIndex(
-    (s) => s.id === storyToSave.id || makeStoryKey(s) === makeStoryKey(storyToSave)
-  );
-
-  let updatedLocal: StoryItem[];
-  if (existingIdx !== -1) {
-    updatedLocal = [...localList];
-    updatedLocal[existingIdx] = { ...updatedLocal[existingIdx], ...storyToSave };
-  } else {
-    updatedLocal = [storyToSave, ...localList];
-  }
-  saveLocalStories(updatedLocal);
-  saveStoryToIndexedDB(storyToSave);
-
+  // 3. Post to backend server API (Single Source of Truth)
   try {
     const res = await fetch('/api/stories', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache'
+      },
       body: JSON.stringify(storyToSave)
     });
+
     if (res.ok) {
       const data = await res.json();
-      if (data && data.success) {
-        // Cache the server's normalized story list (with permanent /uploads/ image URLs)
-        if (Array.isArray(data.stories)) {
-          saveLocalStories(data.stories);
-          saveAllStoriesToIndexedDB(data.stories);
-        }
+      if (data && data.success && Array.isArray(data.stories)) {
         return { success: true, story: data.story, stories: data.stories };
       }
+    } else {
+      const errorData = await res.json().catch(() => ({}));
+      return { success: false, error: errorData.error || `서버 응답 오류 (${res.status})` };
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error('[Storage] Save story to server error:', err);
+    return { success: false, error: err.message || '네트워크 통신 오류가 발생했습니다.' };
   }
 
-  return { success: true, story: storyToSave, stories: updatedLocal };
+  return { success: false, error: '저장 처리 중 오류가 발생했습니다.' };
 }
 
 /**
  * Delete story from persistent server.
- * Only removed when explicitly requested.
  */
 export async function deleteStoryFromServer(id: string): Promise<StoryItem[]> {
-  const localList = getLocalStories().filter((s) => s.id !== id && !BANNED_MOCK_STORY_IDS.has(s.id));
-  saveLocalStories(localList);
-  deleteStoryFromIndexedDB(id).catch(() => {});
-
   try {
     const res = await fetch(`/api/stories/${encodeURIComponent(id)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: { 'Cache-Control': 'no-cache' }
     });
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.stories)) {
-        const cleanStories = data.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
-        saveLocalStories(cleanStories);
-        return cleanStories;
+        return data.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
       }
     }
   } catch (err) {
     console.error('[Storage] Delete story from server error:', err);
   }
 
-  return localList;
+  return await fetchStoriesFromServer();
 }
 
 /**
@@ -445,14 +281,13 @@ export async function updateReactionOnServer(id: string, emoji: string): Promise
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.stories)) {
-        saveLocalStories(data.stories);
         return data.stories;
       }
     }
   } catch (err) {
-    console.error('[Storage] Reaction update error:', err);
+    console.error('Failed to update reaction on server', err);
   }
-  return getLocalStories();
+  return await fetchStoriesFromServer();
 }
 
 /**
@@ -928,91 +763,14 @@ export function saveRosterList(roster: RosterStudent[]): void {
 }
 
 export function getLocalStories(): StoryItem[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_STORIES);
-    if (!raw) {
-      return INITIAL_STORIES;
-    }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      const normalized = parsed
-        .filter((item: any) => item && item.id && !BANNED_MOCK_STORY_IDS.has(item.id))
-        .map((item: any) => {
-          const rawUrls = Array.isArray(item.imageUrls) ? item.imageUrls : (item.imageUrl ? [item.imageUrl] : []);
-          const validUrls = rawUrls.filter((u: any) =>
-            typeof u === 'string' &&
-            u.trim().length > 0 &&
-            !u.startsWith('idb:') &&
-            !u.includes('eunsol_beach_laugh') &&
-            !u.includes('eunsol_sandcastle') &&
-            !u.includes('eunsol_family_sunset')
-          );
-          const fallbackCover = validUrls[0] || (
-            typeof item.imageUrl === 'string' &&
-            item.imageUrl.trim().length > 0 &&
-            !item.imageUrl.startsWith('idb:') &&
-            !item.imageUrl.includes('eunsol_beach_laugh') &&
-            !item.imageUrl.includes('eunsol_sandcastle') &&
-            !item.imageUrl.includes('eunsol_family_sunset')
-              ? item.imageUrl
-              : ''
-          );
-
-          return {
-            ...item,
-            imageUrl: fallbackCover,
-            imageUrls: validUrls
-          };
-        });
-
-      return normalized.length > 0 ? normalized : INITIAL_STORIES;
-    }
-    return INITIAL_STORIES;
-  } catch (e) {
-    console.error('Failed to parse local stories', e);
-    return INITIAL_STORIES;
-  }
+  // Completely eliminate localStorage reliance for stories as requested by user
+  cleanupLegacyLocalStorage();
+  return [];
 }
 
-export function saveLocalStories(stories: StoryItem[]): void {
-  // 1. Always persist all stories with full image fidelity to IndexedDB (no 5MB browser storage limit)
-  saveAllStoriesToIndexedDB(stories).catch(() => {});
-
-  try {
-    // 2. Filter out any invalid idb: pseudo strings from localStorage
-    const cleanStories = stories.map((s) => {
-      const urls = (s.imageUrls || []).filter(
-        (u) => typeof u === 'string' && u.trim().length > 0 && !u.startsWith('idb:')
-      );
-      return {
-        ...s,
-        imageUrls: urls,
-        imageUrl: (s.imageUrl && !s.imageUrl.startsWith('idb:')) ? s.imageUrl : (urls[0] || '')
-      };
-    });
-
-    try {
-      localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(cleanStories));
-    } catch (quotaErr) {
-      // If quota exceeded, clean legacy keys and try saving with lightweight non-base64 copy
-      cleanupLegacyLocalStorage();
-      try {
-        const lightweight = cleanStories.map((s) => {
-          const lightUrls = (s.imageUrls || []).map((u) => (typeof u === 'string' && u.startsWith('data:') ? '' : u)).filter(Boolean);
-          return {
-            ...s,
-            imageUrls: lightUrls,
-            imageUrl: (s.imageUrl && s.imageUrl.startsWith('data:')) ? (lightUrls[0] || '') : s.imageUrl
-          };
-        });
-        localStorage.setItem(STORAGE_KEY_STORIES, JSON.stringify(lightweight));
-      } catch (retryErr) {
-        console.warn('[Storage] localStorage quota reached: full state preserved safely in IndexedDB and server disk.', retryErr);
-      }
-    }
-  } catch (e) {
-    console.warn('[Storage] localStorage save error:', e);
-  }
+export function saveLocalStories(_stories: StoryItem[]): void {
+  // Do not store stories in localStorage to prevent cross-device desync
+  cleanupLegacyLocalStorage();
 }
 
 /**
@@ -1134,6 +892,31 @@ export function saveGasConfig(config: GasConfig): void {
   } catch (e) {
     console.error('Failed to save gas config', e);
   }
+}
+
+export async function fetchGasConfigFromServer(): Promise<GasConfig> {
+  try {
+    const res = await fetch('/api/gas-config');
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && data.config) {
+        saveGasConfig(data.config);
+        return data.config;
+      }
+    }
+  } catch {}
+  return getGasConfig();
+}
+
+export async function saveGasConfigToServer(config: GasConfig): Promise<void> {
+  saveGasConfig(config);
+  try {
+    await fetch('/api/gas-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config })
+    });
+  } catch {}
 }
 
 /**

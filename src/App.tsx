@@ -12,6 +12,9 @@ import {
   saveLocalStories,
   getGasConfig,
   saveGasConfig,
+  fetchGasConfigFromServer,
+  saveGasConfigToServer,
+  cleanupLegacyLocalStorage,
   syncFromGas,
   postToGas,
   getRosterList,
@@ -20,13 +23,12 @@ import {
   deleteStoryFromServer,
   updateReactionOnServer,
   fetchRosterFromServer,
-  saveRosterToServer,
-  healLegacyStories
+  saveRosterToServer
 } from './lib/storage';
 import { INITIAL_STORIES } from './lib/defaultData';
 
 export default function App() {
-  const [stories, setStories] = useState<StoryItem[]>(() => getLocalStories());
+  const [stories, setStories] = useState<StoryItem[]>([]);
   const [roster, setRoster] = useState<RosterStudent[]>(() => getRosterList());
   // Default to '전체' so both PC and Mobile immediately display all registered stories without filter mismatch
   const [selectedWeek, setSelectedWeek] = useState<string>('전체');
@@ -61,7 +63,6 @@ export default function App() {
 
       if (serverStories && Array.isArray(serverStories)) {
         setStories(serverStories);
-        saveLocalStories(serverStories);
       }
       if (serverRoster && Array.isArray(serverRoster) && serverRoster.length > 0) {
         setRoster(serverRoster);
@@ -82,13 +83,12 @@ export default function App() {
   useEffect(() => {
     async function loadInitialData() {
       try {
+        cleanupLegacyLocalStorage();
         await refreshData(true);
 
-        // Proactively heal any legacy idb: references in local cache
-        healLegacyStories().then((healed) => {
-          if (healed && healed.length > 0) {
-            setStories(healed);
-          }
+        // Load shared GAS config from server
+        fetchGasConfigFromServer().then((serverGas) => {
+          if (serverGas) setGasConfig(serverGas);
         }).catch(() => {});
       } catch (e) {
         console.warn('Initial server fetch warning:', e);
@@ -98,17 +98,13 @@ export default function App() {
     }
 
     loadInitialData();
-
-    // Load GAS config
-    const gasConf = getGasConfig();
-    setGasConfig(gasConf);
   }, [refreshData]);
 
-  // Fast background polling every 4 seconds to guarantee real-time multi-device sync
+  // Fast background polling every 3 seconds to guarantee real-time multi-device sync
   useEffect(() => {
     const interval = setInterval(() => {
       refreshData(true);
-    }, 4000);
+    }, 3000);
     return () => clearInterval(interval);
   }, [refreshData]);
 
@@ -212,18 +208,15 @@ export default function App() {
     // Persist to server (converts images to permanent disk files)
     const result = await saveStoryToServer(savedStory);
 
+    if (!result.success) {
+      showToast(result.error || '저장 중 오류가 발생했습니다.', 'error');
+      throw new Error(result.error || '저장 실패');
+    }
+
     if (result.stories && result.stories.length > 0) {
       setStories(result.stories);
     } else {
-      setStories((prev) => {
-        const idx = prev.findIndex((s) => s.id === savedStory.id);
-        if (idx !== -1) {
-          const cp = [...prev];
-          cp[idx] = savedStory;
-          return cp;
-        }
-        return [savedStory, ...prev];
-      });
+      await refreshData(true);
     }
 
     // Sync to GAS if connected
@@ -231,7 +224,7 @@ export default function App() {
       postToGas(gasConfig.webAppUrl, savedStory);
     }
 
-    showToast('사진과 이야기가 저장되었습니다!', 'success');
+    showToast('사진과 이야기가 서버에 성공적으로 저장되었습니다!', 'success');
 
     // Automatically switch to PPT view of that week so teacher/students can see the slide!
     setSelectedWeek(savedStory.week);
@@ -239,9 +232,9 @@ export default function App() {
   };
 
   // Save GAS config
-  const handleSaveGasConfig = (config: GasConfig) => {
+  const handleSaveGasConfig = async (config: GasConfig) => {
     setGasConfig(config);
-    saveGasConfig(config);
+    await saveGasConfigToServer(config);
   };
 
   // Reset Sample Data

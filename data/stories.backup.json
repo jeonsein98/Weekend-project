@@ -1,5 +1,18 @@
 [
   {
+    "studentName": "김강모",
+    "week": "9월 1주차(방학지낸이야기)",
+    "className": "은솔1반",
+    "title": "모바일 연동 테스트",
+    "content": "테스트 내용입니다.",
+    "imageUrls": [
+      "/uploads/story_____1_1788706123876_yytkx.png"
+    ],
+    "imageUrl": "/uploads/story_____1_1788706123876_yytkx.png",
+    "id": "story-1788706123876-krj5",
+    "createdAt": "2026-09-06T14:48:43.876Z"
+  },
+  {
     "studentName": "강루하",
     "week": "9월 1주차(방학지낸이야기)",
     "title": "주말 이야기 테스트",

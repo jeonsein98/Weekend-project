@@ -29,6 +29,7 @@ const STORIES_FILE = path.join(DATA_DIR, 'stories.json');
 const STORIES_BACKUP_FILE = path.join(DATA_DIR, 'stories.backup.json');
 const ROSTER_FILE = path.join(DATA_DIR, 'roster.json');
 const ROSTER_BACKUP_FILE = path.join(DATA_DIR, 'roster.backup.json');
+const GAS_CONFIG_FILE = path.join(DATA_DIR, 'gas_config.json');
 const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
 const DIST_UPLOADS_DIR = path.join(process.cwd(), 'dist', 'uploads');
 const DATA_UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -300,6 +301,26 @@ function writeRoster(roster: any[]): boolean {
     return true;
   } catch (err) {
     console.error('Failed to write roster:', err);
+    return false;
+  }
+}
+
+function readGasConfig(): { webAppUrl: string; isConnected: boolean } {
+  try {
+    if (fs.existsSync(GAS_CONFIG_FILE)) {
+      const raw = fs.readFileSync(GAS_CONFIG_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch {}
+  return { webAppUrl: '', isConnected: false };
+}
+
+function writeGasConfig(config: { webAppUrl: string; isConnected: boolean }): boolean {
+  try {
+    fs.writeFileSync(GAS_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+    return true;
+  } catch (err) {
+    console.error('Failed to write gas config:', err);
     return false;
   }
 }
@@ -660,6 +681,19 @@ app.post('/api/stories', (req, res) => {
       }
 
       writeStories(updatedStories);
+
+      // Auto-sync to Google Sheets in background if configured
+      try {
+        const gasConf = readGasConfig();
+        if (gasConf.isConnected && gasConf.webAppUrl && gasConf.webAppUrl.startsWith('http')) {
+          fetch(gasConf.webAppUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ action: 'save', story: returnStory })
+          }).catch((gErr) => console.warn('Background GAS sync warning:', gErr));
+        }
+      } catch {}
+
       return res.json({ success: true, story: returnStory, stories: updatedStories });
     } catch (err: any) {
       console.error('Failed to save story on server:', err);
@@ -918,6 +952,23 @@ app.post('/api/gas-proxy', async (req, res) => {
   } catch (err: any) {
     console.error('GAS Proxy Error:', err);
     return res.status(500).json({ error: err.message || 'GAS Proxy call failed' });
+  }
+});
+
+// Google Apps Script Configuration Endpoints
+app.get('/api/gas-config', (_req, res) => {
+  res.json({ success: true, config: readGasConfig() });
+});
+
+app.post('/api/gas-config', (req, res) => {
+  try {
+    const { config } = req.body;
+    if (config) {
+      writeGasConfig(config);
+    }
+    return res.json({ success: true, config: readGasConfig() });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
