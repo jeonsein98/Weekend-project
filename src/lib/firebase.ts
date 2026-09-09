@@ -51,6 +51,29 @@ export const storage: FirebaseStorage = getStorage(app);
 export const isFirebaseConfigured = Boolean(firebaseConfig.projectId && firebaseConfig.apiKey);
 
 /**
+ * Deep sanitize any object or array to ensure no `undefined` properties are sent to Firestore.
+ * Firestore throws a fatal error if any field is undefined.
+ */
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) return null as unknown as T;
+  if (Array.isArray(data)) {
+    return data
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeForFirestore(item)) as unknown as T;
+  }
+  if (typeof data === 'object') {
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        cleaned[key] = sanitizeForFirestore(value);
+      }
+    }
+    return cleaned as T;
+  }
+  return data;
+}
+
+/**
  * Validate connection to Firestore on initial boot
  */
 export async function testFirestoreConnection(): Promise<boolean> {
@@ -62,7 +85,7 @@ export async function testFirestoreConnection(): Promise<boolean> {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.warn('[Firebase] Firestore client appears offline, checking configuration...');
     }
-    // Any response from server (even permission-denied or not-found) confirms network connectivity
+    // Any response from server confirms network connectivity
     return true;
   }
 }
@@ -129,8 +152,9 @@ export async function fetchStoriesFromFirestore(): Promise<StoryItem[]> {
     const list: StoryItem[] = [];
     snapshot.forEach((d) => {
       const data = d.data() as StoryItem;
-      if (data && data.id) {
-        list.push({ ...data, id: d.id });
+      const storyId = data?.id || d.id;
+      if (data && storyId) {
+        list.push({ ...data, id: storyId });
       }
     });
     return list;
@@ -141,8 +165,9 @@ export async function fetchStoriesFromFirestore(): Promise<StoryItem[]> {
       const list: StoryItem[] = [];
       snapshot.forEach((d) => {
         const data = d.data() as StoryItem;
-        if (data && data.id) {
-          list.push({ ...data, id: d.id });
+        const storyId = data?.id || d.id;
+        if (data && storyId) {
+          list.push({ ...data, id: storyId });
         }
       });
       return list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
@@ -156,15 +181,21 @@ export async function fetchStoriesFromFirestore(): Promise<StoryItem[]> {
 /**
  * Save or update a story in Cloud Firestore
  */
-export async function saveStoryToFirestore(story: StoryItem): Promise<void> {
-  if (!isFirebaseConfigured || !story || !story.id) return;
+export async function saveStoryToFirestore(story: StoryItem): Promise<StoryItem> {
+  if (!isFirebaseConfigured || !story || !story.id) return story;
   const storyRef = doc(db, 'stories', story.id);
-  // Ensure image fields are normalized
-  const payload = {
+  // Ensure image fields are normalized and undefined fields are removed
+  const imageUrls = Array.isArray(story.imageUrls) ? story.imageUrls.filter(Boolean) : (story.imageUrl ? [story.imageUrl] : []);
+  const imageUrl = imageUrls[0] || story.imageUrl || '';
+  const payload = sanitizeForFirestore({
     ...story,
+    id: story.id,
+    imageUrl,
+    imageUrls: imageUrls.length > 0 ? imageUrls : (imageUrl ? [imageUrl] : []),
     updatedAt: new Date().toISOString()
-  };
+  });
   await setDoc(storyRef, payload, { merge: true });
+  return payload as StoryItem;
 }
 
 /**
@@ -195,8 +226,9 @@ export function subscribeToStories(
       const list: StoryItem[] = [];
       snapshot.forEach((d) => {
         const data = d.data() as StoryItem;
-        if (data && data.id) {
-          list.push({ ...data, id: d.id });
+        const storyId = data?.id || d.id;
+        if (data && storyId) {
+          list.push({ ...data, id: storyId });
         }
       });
       // Sort newest first
@@ -216,7 +248,11 @@ export function subscribeToStories(
 export async function saveRosterToFirestore(roster: RosterStudent[]): Promise<void> {
   if (!isFirebaseConfigured || !Array.isArray(roster)) return;
   const rosterRef = doc(db, 'app_metadata', 'roster');
-  await setDoc(rosterRef, { students: roster, updatedAt: new Date().toISOString() }, { merge: true });
+  const payload = sanitizeForFirestore({
+    students: roster,
+    updatedAt: new Date().toISOString()
+  });
+  await setDoc(rosterRef, payload, { merge: true });
 }
 
 /**

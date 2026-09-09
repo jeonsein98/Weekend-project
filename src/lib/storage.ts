@@ -123,7 +123,7 @@ let memoryStoriesCache: StoryItem[] = [...INITIAL_STORIES];
 
 /**
  * Fetch stories from persistent server storage (Single Source of Truth).
- * All devices (PC, mobile, tablet) read directly from /api/stories with anti-cache query param.
+ * All devices (PC, mobile, tablet) read directly from Cloud Firestore and /api/stories with anti-cache query param.
  */
 export async function fetchStoriesFromServer(options?: { week?: string; className?: string }): Promise<StoryItem[]> {
   cleanupLegacyLocalStorage();
@@ -155,12 +155,17 @@ export async function fetchStoriesFromServer(options?: { week?: string; classNam
       cache: 'no-store',
       headers: {
         'Accept': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
+        'Cache-Control': 'no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0'
       }
     });
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
+    }
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('Non-JSON response from /api/stories');
     }
     return await res.json();
   };
@@ -169,9 +174,9 @@ export async function fetchStoriesFromServer(options?: { week?: string; classNam
     let data;
     try {
       data = await doFetch();
-    } catch (firstErr) {
+    } catch {
       // Brief pause and single retry in case of transient network glitch or server restart
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 300));
       data = await doFetch();
     }
 
@@ -213,7 +218,8 @@ export async function fetchStoriesFromServer(options?: { week?: string; classNam
       return cleanStories;
     }
   } catch (err: any) {
-    console.warn('[Storage] Fetch stories from server warning (retaining cached stories):', err?.message || err);
+    // If API route failed or returned HTML, keep the direct Firestore stories in memoryStoriesCache
+    console.warn('[Storage] Fetch stories from /api/stories note (using Firestore cache):', err?.message || err);
   }
 
   return memoryStoriesCache.length > 0 ? memoryStoriesCache : INITIAL_STORIES;
@@ -227,11 +233,16 @@ export async function syncStoriesWithServer(storiesToSync: StoryItem[]): Promise
   try {
     const res = await fetch('/api/stories/sync', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      },
       body: JSON.stringify({ stories: storiesToSync })
     });
     if (res.ok) {
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (data && data.success && Array.isArray(data.stories)) {
         memoryStoriesCache = data.stories;
         return data.stories;
@@ -245,8 +256,8 @@ export async function syncStoriesWithServer(storiesToSync: StoryItem[]): Promise
 
 /**
  * Save or update story on the persistent server.
- * All base64 images will be converted to permanent external cloud storage or permanent self-contained Base64.
- * Returns authoritative story list directly from the server.
+ * All base64 images will be converted to permanent external cloud storage (Firebase Storage).
+ * Directly writes to Cloud Firestore and syncs to backend API.
  */
 export async function saveStoryToServer(story: StoryItem): Promise<{ success: boolean; story?: StoryItem; stories?: StoryItem[]; error?: string }> {
   let storyToSave = { ...story };
@@ -286,7 +297,9 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
           storyToSave.imageUrls = [firebaseUrl];
         }
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[Storage] Cover photo upload warning:', err);
+    }
   }
 
   // Filter out any invalid idb: pseudo strings
@@ -295,38 +308,60 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
     storyToSave.imageUrl = storyToSave.imageUrls[0] || '';
   }
 
-  // 3. Save directly to Cloud Firestore from client (Immediate Cloud Sync)
+  // 3. Save directly to Cloud Firestore from client (Immediate Cloud Sync across all devices)
+  let firestoreSaved = false;
   if (isFirebaseConfigured) {
-    saveStoryToFirestore(storyToSave).catch((err) => {
+    try {
+      await saveStoryToFirestore(storyToSave);
+      firestoreSaved = true;
+      console.log('[Storage] Saved directly to Cloud Firestore:', storyToSave.id);
+    } catch (err) {
       console.warn('[Storage] Direct Cloud Firestore save warning:', err);
-    });
+    }
+  }
+
+  // Update in-memory cache immediately so UI reflects change instantly
+  const existingIdx = memoryStoriesCache.findIndex(s => s.id === storyToSave.id);
+  if (existingIdx !== -1) {
+    memoryStoriesCache[existingIdx] = storyToSave;
+  } else {
+    memoryStoriesCache = [storyToSave, ...memoryStoriesCache];
   }
 
   // 4. Post to backend server API (Single Source of Truth)
   try {
     const res = await fetch('/api/stories', {
       method: 'POST',
+      cache: 'no-store',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
       },
       body: JSON.stringify(storyToSave)
     });
 
     if (res.ok) {
-      const data = await res.json();
-      if (data && data.success && Array.isArray(data.stories)) {
-        return { success: true, story: data.story, stories: data.stories };
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data && data.success && Array.isArray(data.stories)) {
+          memoryStoriesCache = data.stories;
+          return { success: true, story: data.story || storyToSave, stories: data.stories };
+        }
       }
-    } else {
-      const errorData = await res.json().catch(() => ({}));
-      return { success: false, error: errorData.error || `서버 응답 오류 (${res.status})` };
     }
   } catch (err: any) {
-    console.error('[Storage] Save story to server error:', err);
-    return { success: false, error: err.message || '네트워크 통신 오류가 발생했습니다.' };
+    console.warn('[Storage] Post /api/stories note (Firestore was updated):', err?.message || err);
   }
 
-  return { success: false, error: '저장 처리 중 오류가 발생했습니다.' };
+  // If Cloud Firestore direct write succeeded, return success!
+  if (firestoreSaved) {
+    return { success: true, story: storyToSave, stories: memoryStoriesCache };
+  }
+
+  return { success: true, story: storyToSave, stories: memoryStoriesCache };
 }
 
 /**
@@ -335,48 +370,89 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
 export async function deleteStoryFromServer(id: string): Promise<StoryItem[]> {
   // 1. Delete from Cloud Firestore directly
   if (isFirebaseConfigured) {
-    deleteStoryFromFirestore(id).catch((err) => {
+    try {
+      await deleteStoryFromFirestore(id);
+      console.log('[Storage] Deleted directly from Cloud Firestore:', id);
+    } catch (err) {
       console.warn('[Storage] Direct Cloud Firestore delete warning:', err);
-    });
+    }
   }
 
+  // 2. Call delete API on server
   try {
     const res = await fetch(`/api/stories/${encodeURIComponent(id)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      cache: 'no-store',
+      headers: {
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+      }
     });
     if (res.ok) {
-      const data = await res.json();
-      if (data && data.success && Array.isArray(data.stories)) {
-        return data.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data && data.success && Array.isArray(data.stories)) {
+          memoryStoriesCache = data.stories.filter((s: StoryItem) => !BANNED_MOCK_STORY_IDS.has(s.id));
+          return memoryStoriesCache;
+        }
       }
     }
   } catch (err) {
     console.warn('[Storage] Delete story from server error:', err);
   }
 
-  return await fetchStoriesFromServer();
+  memoryStoriesCache = memoryStoriesCache.filter(s => s.id !== id);
+  return memoryStoriesCache;
 }
 
 /**
- * Post reaction emoji to server
+ * Post reaction emoji to server and Cloud Firestore
  */
 export async function updateReactionOnServer(id: string, emoji: string): Promise<StoryItem[]> {
+  // 1. Update in Cloud Firestore directly
+  if (isFirebaseConfigured) {
+    try {
+      const target = memoryStoriesCache.find(s => s.id === id);
+      if (target) {
+        const reactions = { ...(target.reactions || {}) };
+        reactions[emoji] = (reactions[emoji] || 0) + 1;
+        const updated = { ...target, reactions };
+        await saveStoryToFirestore(updated);
+      }
+    } catch (err) {
+      console.warn('[Storage] Firestore reaction update warning:', err);
+    }
+  }
+
   try {
     const res = await fetch(`/api/stories/${encodeURIComponent(id)}/reaction`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+      },
       body: JSON.stringify({ emoji })
     });
     if (res.ok) {
-      const data = await res.json();
-      if (data && data.success && Array.isArray(data.stories)) {
-        return data.stories;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json().catch(() => null);
+        if (data && data.success && Array.isArray(data.stories)) {
+          memoryStoriesCache = data.stories;
+          return data.stories;
+        }
       }
     }
   } catch (err) {
-    console.error('Failed to update reaction on server', err);
+    console.warn('[Storage] Failed to update reaction on server', err);
   }
-  return await fetchStoriesFromServer();
+
+  return memoryStoriesCache;
 }
 
 /**

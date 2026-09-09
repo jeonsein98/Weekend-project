@@ -105,7 +105,7 @@ export default function App() {
   useEffect(() => {
     if (!isFirebaseConfigured) return;
     const unsubscribe = subscribeToStories((liveStories) => {
-      if (Array.isArray(liveStories) && liveStories.length > 0) {
+      if (Array.isArray(liveStories)) {
         setStories(liveStories);
       }
     });

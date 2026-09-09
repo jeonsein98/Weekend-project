@@ -391,6 +391,26 @@ function getKvConfig() {
   };
 }
 
+// Deep sanitize object to remove any undefined fields before Firestore operations
+function sanitizeForFirestore(data: any): any {
+  if (data === null || data === undefined) return null;
+  if (Array.isArray(data)) {
+    return data
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeForFirestore(item));
+  }
+  if (typeof data === 'object') {
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined) {
+        cleaned[key] = sanitizeForFirestore(value);
+      }
+    }
+    return cleaned;
+  }
+  return data;
+}
+
 // Primary External Cloud Database fetcher (Guarantees PC & Mobile share exact single source of truth)
 async function readExternalStories(): Promise<any[]> {
   // 1. Authoritative Central Source: Cloud Firestore
@@ -401,8 +421,9 @@ async function readExternalStories(): Promise<any[]> {
         const list: any[] = [];
         snap.forEach((d) => {
           const item = d.data();
-          if (item && item.id && !BANNED_MOCK_STORY_IDS.has(item.id)) {
-            list.push({ ...item, id: d.id });
+          const storyId = item?.id || d.id;
+          if (item && storyId && !BANNED_MOCK_STORY_IDS.has(storyId)) {
+            list.push({ ...item, id: storyId });
           }
         });
         if (list.length > 0) {
@@ -520,7 +541,10 @@ function normalizeStoryImages(stories: any[]): any[] {
 
 // Primary External Cloud Database persister
 async function writeExternalStories(stories: any[]): Promise<boolean> {
-  const cleanStories = stories.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
+  const cleanStories = stories.filter((s: any) => {
+    const id = s?.id;
+    return s && id && !BANNED_MOCK_STORY_IDS.has(id);
+  });
   const normalized = normalizeStoryImages(cleanStories);
   memoryStoriesCache = normalized;
 
@@ -528,8 +552,14 @@ async function writeExternalStories(stories: any[]): Promise<boolean> {
   if (isFirestoreReady) {
     try {
       for (const story of normalized) {
-        if (story && story.id) {
-          await setDoc(doc(firestoreDb, 'stories', story.id), story, { merge: true });
+        const storyId = story.id;
+        if (story && storyId) {
+          const cleanDoc = sanitizeForFirestore({
+            ...story,
+            id: storyId,
+            updatedAt: new Date().toISOString()
+          });
+          await setDoc(doc(firestoreDb, 'stories', storyId), cleanDoc, { merge: true });
         }
       }
     } catch (err) {
@@ -593,10 +623,12 @@ function writeRoster(roster: any[]): boolean {
   if (!Array.isArray(roster)) return false;
   memoryRosterCache = roster;
   if (isFirestoreReady) {
-    setDoc(doc(firestoreDb, 'app_metadata', 'roster'), {
+    const cleanRoster = sanitizeForFirestore({
       students: roster,
       updatedAt: new Date().toISOString()
-    }, { merge: true }).catch((err) => console.warn('[Firestore] writeRoster error:', err));
+    });
+    setDoc(doc(firestoreDb, 'app_metadata', 'roster'), cleanRoster, { merge: true })
+      .catch((err) => console.warn('[Firestore] writeRoster error:', err));
   }
   return true;
 }
