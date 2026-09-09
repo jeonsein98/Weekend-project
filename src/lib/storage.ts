@@ -11,6 +11,15 @@ import {
   getAllPhotosFromIndexedDB,
   findPhotoForStudent
 } from './idb';
+import {
+  fetchStoriesFromFirestore,
+  saveStoryToFirestore,
+  deleteStoryFromFirestore,
+  uploadPhotoToFirebaseStorage,
+  fetchRosterFromFirestore,
+  saveRosterToFirestore,
+  isFirebaseConfigured
+} from './firebase';
 
 const STORAGE_KEY_STORIES = 'weekend_stories_data_v1';
 const STORAGE_KEY_GAS_CONFIG = 'weekend_stories_gas_config_v1';
@@ -118,6 +127,21 @@ let memoryStoriesCache: StoryItem[] = [...INITIAL_STORIES];
  */
 export async function fetchStoriesFromServer(options?: { week?: string; className?: string }): Promise<StoryItem[]> {
   cleanupLegacyLocalStorage();
+
+  // 1. Direct Cloud Firestore fetch for instant cross-device synchronization
+  if (isFirebaseConfigured) {
+    try {
+      const fsStories = await fetchStoriesFromFirestore();
+      if (fsStories && fsStories.length > 0) {
+        const validFs = fsStories.filter(s => s && s.studentName && !BANNED_MOCK_STORY_IDS.has(s.id));
+        if (validFs.length > 0) {
+          memoryStoriesCache = validFs;
+        }
+      }
+    } catch (fbErr) {
+      console.warn('[Storage] Direct Firestore fetch warning:', fbErr);
+    }
+  }
 
   const params = new URLSearchParams();
   if (options?.week && options.week !== '전체') params.append('week', options.week);
@@ -227,28 +251,17 @@ export async function syncStoriesWithServer(storiesToSync: StoryItem[]): Promise
 export async function saveStoryToServer(story: StoryItem): Promise<{ success: boolean; story?: StoryItem; stories?: StoryItem[]; error?: string }> {
   let storyToSave = { ...story };
 
-  // 1. If story contains raw base64 images, attempt external cloud upload if available
-  if (Array.isArray(storyToSave.imageUrls) && storyToSave.imageUrls.some(u => typeof u === 'string' && u.startsWith('data:'))) {
+  // 1. Direct Firebase Storage Upload for high-res photos
+  if (isFirebaseConfigured && Array.isArray(storyToSave.imageUrls) && storyToSave.imageUrls.some(u => typeof u === 'string' && u.startsWith('data:'))) {
     try {
       const uploadedUrls = await Promise.all(
         storyToSave.imageUrls.map(async (u, idx) => {
           if (typeof u === 'string' && u.startsWith('data:')) {
-            try {
-              const upRes = await fetch('/api/upload-photo', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  imageBase64: u,
-                  name: `photo_${storyToSave.studentName || 'child'}_${idx + 1}`
-                })
-              });
-              if (upRes.ok) {
-                const upData = await upRes.json();
-                // Only adopt if it's a permanent external URL or base64. Never adopt ephemeral local /uploads/ paths!
-                if (upData.url && !upData.url.startsWith('/uploads/')) return upData.url;
-              }
-            } catch (e) {
-              console.warn('[Storage] Pre-upload error:', e);
+            const cleanName = (storyToSave.studentName || 'child').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const path = `stories/${cleanName}_${Date.now()}_${idx + 1}.jpg`;
+            const firebaseUrl = await uploadPhotoToFirebaseStorage(u, path);
+            if (firebaseUrl && firebaseUrl.startsWith('http')) {
+              return firebaseUrl;
             }
           }
           return u;
@@ -257,28 +270,20 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
       storyToSave.imageUrls = uploadedUrls.filter(u => typeof u === 'string' && !u.startsWith('idb:'));
       storyToSave.imageUrl = storyToSave.imageUrls[0] || '';
     } catch (err) {
-      console.warn('[Storage] Photo upload preprocessing failed:', err);
+      console.warn('[Storage] Direct Firebase Storage upload preprocessing failed:', err);
     }
   }
 
-  // 2. Also ensure single cover image is permanent
-  if (typeof storyToSave.imageUrl === 'string' && storyToSave.imageUrl.startsWith('data:')) {
+  // 2. Also ensure single cover image is permanent via Firebase Storage
+  if (isFirebaseConfigured && typeof storyToSave.imageUrl === 'string' && storyToSave.imageUrl.startsWith('data:')) {
     try {
-      const upRes = await fetch('/api/upload-photo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: storyToSave.imageUrl,
-          name: `cover_${storyToSave.studentName || 'child'}`
-        })
-      });
-      if (upRes.ok) {
-        const upData = await upRes.json();
-        if (upData.url && !upData.url.startsWith('/uploads/')) {
-          storyToSave.imageUrl = upData.url;
-          if (!storyToSave.imageUrls || storyToSave.imageUrls.length === 0) {
-            storyToSave.imageUrls = [upData.url];
-          }
+      const cleanName = (storyToSave.studentName || 'child').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const path = `stories/${cleanName}_cover_${Date.now()}.jpg`;
+      const firebaseUrl = await uploadPhotoToFirebaseStorage(storyToSave.imageUrl, path);
+      if (firebaseUrl && firebaseUrl.startsWith('http')) {
+        storyToSave.imageUrl = firebaseUrl;
+        if (!storyToSave.imageUrls || storyToSave.imageUrls.length === 0) {
+          storyToSave.imageUrls = [firebaseUrl];
         }
       }
     } catch {}
@@ -290,7 +295,14 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
     storyToSave.imageUrl = storyToSave.imageUrls[0] || '';
   }
 
-  // 3. Post to backend server API (Single Source of Truth)
+  // 3. Save directly to Cloud Firestore from client (Immediate Cloud Sync)
+  if (isFirebaseConfigured) {
+    saveStoryToFirestore(storyToSave).catch((err) => {
+      console.warn('[Storage] Direct Cloud Firestore save warning:', err);
+    });
+  }
+
+  // 4. Post to backend server API (Single Source of Truth)
   try {
     const res = await fetch('/api/stories', {
       method: 'POST',
@@ -318,9 +330,16 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
 }
 
 /**
- * Delete story from persistent server.
+ * Delete story from persistent server and Cloud Firestore.
  */
 export async function deleteStoryFromServer(id: string): Promise<StoryItem[]> {
+  // 1. Delete from Cloud Firestore directly
+  if (isFirebaseConfigured) {
+    deleteStoryFromFirestore(id).catch((err) => {
+      console.warn('[Storage] Direct Cloud Firestore delete warning:', err);
+    });
+  }
+
   try {
     const res = await fetch(`/api/stories/${encodeURIComponent(id)}`, {
       method: 'DELETE'
@@ -378,6 +397,22 @@ export async function fetchRosterFromServer(): Promise<RosterStudent[]> {
   for (const s of [...localRoster, ...idbRoster]) {
     if (s && s.name && s.name.trim() && !LEGACY_MOCK_STUDENT_NAMES.has(s.name.trim())) {
       clientMap.set(s.name.trim().toLowerCase(), s);
+    }
+  }
+
+  // 1.5 Direct read from Cloud Firestore app_metadata
+  if (isFirebaseConfigured) {
+    try {
+      const fsRoster = await fetchRosterFromFirestore();
+      if (Array.isArray(fsRoster) && fsRoster.length > 0) {
+        for (const s of fsRoster) {
+          if (s && s.name && !LEGACY_MOCK_STUDENT_NAMES.has(s.name.trim())) {
+            clientMap.set(s.name.trim().toLowerCase(), s);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Storage] Firestore roster read skipped:', e);
     }
   }
 
@@ -443,6 +478,12 @@ export async function fetchRosterFromServer(): Promise<RosterStudent[]> {
 export async function saveRosterToServer(roster: RosterStudent[]): Promise<RosterStudent[]> {
   const ordered = ensureRosterOrder(roster);
   saveRosterList(ordered);
+
+  if (isFirebaseConfigured) {
+    saveRosterToFirestore(ordered).catch((err) => {
+      console.warn('[Storage] Direct Firestore save roster error:', err);
+    });
+  }
 
   try {
     const res = await fetch('/api/roster', {

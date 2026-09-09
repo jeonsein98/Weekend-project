@@ -25,6 +25,7 @@ import {
   fetchRosterFromServer,
   saveRosterToServer
 } from './lib/storage';
+import { subscribeToStories, isFirebaseConfigured } from './lib/firebase';
 import { INITIAL_STORIES } from './lib/defaultData';
 
 export default function App() {
@@ -99,6 +100,19 @@ export default function App() {
 
     loadInitialData();
   }, [refreshData]);
+
+  // Real-time Cloud Firestore subscription for instant zero-latency push across PC and Mobile
+  useEffect(() => {
+    if (!isFirebaseConfigured) return;
+    const unsubscribe = subscribeToStories((liveStories) => {
+      if (Array.isArray(liveStories) && liveStories.length > 0) {
+        setStories(liveStories);
+      }
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   // Fast background polling every 3 seconds to guarantee real-time multi-device sync
   useEffect(() => {

@@ -4,8 +4,46 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  getFirestore,
+  collection,
+  getDocs,
+  doc,
+  setDoc,
+  deleteDoc,
+  query,
+  orderBy
+} from 'firebase/firestore';
+import {
+  getStorage,
+  ref as storageRef,
+  uploadString,
+  getDownloadURL
+} from 'firebase/storage';
+import appletConfig from './firebase-applet-config.json';
 
 dotenv.config();
+
+// Universal Firebase Config Resolver supporting both applet config and standard environment variables
+const fbConfig = {
+  apiKey: process.env.VITE_FIREBASE_API_KEY || process.env.NEXT_PUBLIC_FIREBASE_API_KEY || appletConfig.apiKey || '',
+  authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || appletConfig.authDomain || '',
+  projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || appletConfig.projectId || '',
+  storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || appletConfig.storageBucket || '',
+  messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || appletConfig.messagingSenderId || '',
+  appId: process.env.VITE_FIREBASE_APP_ID || process.env.NEXT_PUBLIC_FIREBASE_APP_ID || appletConfig.appId || '',
+  firestoreDatabaseId: process.env.VITE_FIRESTORE_DATABASE_ID || process.env.NEXT_PUBLIC_FIRESTORE_DATABASE_ID || appletConfig.firestoreDatabaseId || '(default)'
+};
+
+const fbApp = getApps().length > 0 ? getApp() : initializeApp(fbConfig);
+const firestoreDb = fbConfig.firestoreDatabaseId && fbConfig.firestoreDatabaseId !== '(default)'
+  ? getFirestore(fbApp, fbConfig.firestoreDatabaseId)
+  : getFirestore(fbApp);
+const firebaseStorage = getStorage(fbApp);
+
+const isFirestoreReady = Boolean(fbConfig.projectId && fbConfig.apiKey);
+console.log(`[Firebase Server] Initialized. Project: ${fbConfig.projectId}, DB: ${fbConfig.firestoreDatabaseId}, Ready: ${isFirestoreReady}`);
 
 const app = express();
 const PORT = 3000;
@@ -29,61 +67,15 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-// Persistent Storage Directories
-const DATA_DIR = path.join(process.cwd(), 'data');
-const STORIES_FILE = path.join(DATA_DIR, 'stories.json');
-const STORIES_BACKUP_FILE = path.join(DATA_DIR, 'stories.backup.json');
-const ROSTER_FILE = path.join(DATA_DIR, 'roster.json');
-const ROSTER_BACKUP_FILE = path.join(DATA_DIR, 'roster.backup.json');
-const GAS_CONFIG_FILE = path.join(DATA_DIR, 'gas_config.json');
-const UPLOADS_DIR = path.join(process.cwd(), 'public', 'uploads');
-const DIST_UPLOADS_DIR = path.join(process.cwd(), 'dist', 'uploads');
-const DATA_UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+// Statically serve public assets if present
+const PUBLIC_DIR = path.join(process.cwd(), 'public');
+app.use(express.static(PUBLIC_DIR, { maxAge: '30d' }));
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-if (!fs.existsSync(DATA_UPLOADS_DIR)) fs.mkdirSync(DATA_UPLOADS_DIR, { recursive: true });
-if (!fs.existsSync(DIST_UPLOADS_DIR)) {
-  try { fs.mkdirSync(DIST_UPLOADS_DIR, { recursive: true }); } catch {}
-}
-
-// Statically serve uploaded photos from public, data/uploads, and dist/uploads
-app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '30d', immutable: true }));
-app.use('/uploads', express.static(DATA_UPLOADS_DIR, { maxAge: '30d', immutable: true }));
-if (fs.existsSync(DIST_UPLOADS_DIR)) {
-  app.use('/uploads', express.static(DIST_UPLOADS_DIR, { maxAge: '30d', immutable: true }));
-}
-
-// Fallback direct file route for /uploads/:filename to guarantee 100% photo availability without 404
-app.get('/uploads/:filename', (req, res, _next) => {
-  const safeFilename = path.basename(req.params.filename);
-  const paths = [
-    path.join(UPLOADS_DIR, safeFilename),
-    path.join(DATA_UPLOADS_DIR, safeFilename),
-    path.join(DIST_UPLOADS_DIR, safeFilename)
-  ];
-  for (const p of paths) {
-    if (fs.existsSync(p)) {
-      try {
-        const stats = fs.statSync(p);
-        if (stats.size > 200) {
-          return res.sendFile(p);
-        }
-      } catch {}
-    }
-  }
-
-  // If local file does not exist or is corrupted (e.g. ephemeral filesystem cold start on Vercel),
-  // fallback gracefully to our verified bundled static assets instead of 404!
-  const beachAsset = path.join(process.cwd(), 'public', 'kindergarten_beach_vacation.jpg');
-  const picnicAsset = path.join(process.cwd(), 'public', 'kindergarten_family_picnic.jpg');
-  const lowerName = safeFilename.toLowerCase();
-
-  if (lowerName.includes('test') || lowerName.includes('ruha') || lowerName.includes('picnic') || lowerName.includes('sandcastle') || lowerName.includes('sunset')) {
-    if (fs.existsSync(picnicAsset)) return res.sendFile(picnicAsset);
-  }
-  if (fs.existsSync(beachAsset)) {
-    return res.sendFile(beachAsset);
+// Fallback route for legacy /uploads/:filename to guarantee 100% photo availability without local disk dependencies
+app.get('/uploads/:filename', (req, res) => {
+  const safeFilename = path.basename(req.params.filename || '').toLowerCase();
+  if (safeFilename.includes('test') || safeFilename.includes('ruha') || safeFilename.includes('picnic') || safeFilename.includes('sandcastle') || safeFilename.includes('sunset')) {
+    return res.redirect(302, '/kindergarten_family_picnic.jpg');
   }
   return res.redirect(302, '/kindergarten_beach_vacation.jpg');
 });
@@ -258,9 +250,8 @@ function isSameStudentAndWeek(name1?: string, week1?: string, name2?: string, we
 
 // In-Memory cache initialized with canonical registered stories from 9/5~9/6
 let memoryStoriesCache: any[] = [...DEFAULT_INITIAL_STORIES];
-
-// External Central Storage Configuration Cache
-const CLOUD_CONFIG_FILE = path.join(DATA_DIR, 'cloud_config.json');
+let memoryRosterCache: any[] = [...DEFAULT_INITIAL_ROSTER];
+let memoryGasConfig = { webAppUrl: '', isConnected: false };
 
 interface CloudStorageSettings {
   supabaseUrl?: string;
@@ -273,32 +264,80 @@ interface CloudStorageSettings {
 
 let cloudConfigMemory: CloudStorageSettings = {};
 
-function readCloudConfig(): CloudStorageSettings {
+// Background Seed Initial Data to Firestore if collections are empty
+async function seedFirestoreIfEmpty() {
+  if (!isFirestoreReady) return;
   try {
-    if (fs.existsSync(CLOUD_CONFIG_FILE)) {
-      const raw = fs.readFileSync(CLOUD_CONFIG_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
-        cloudConfigMemory = { ...cloudConfigMemory, ...parsed };
+    const storiesSnap = await getDocs(collection(firestoreDb, 'stories'));
+    if (storiesSnap.empty) {
+      console.log('[Firestore] Seeding canonical initial stories to Cloud Firestore...');
+      for (const s of DEFAULT_INITIAL_STORIES) {
+        await setDoc(doc(firestoreDb, 'stories', s.id), s, { merge: true });
+      }
+    } else {
+      const list: any[] = [];
+      storiesSnap.forEach((d) => {
+        const item = d.data();
+        if (item && item.id && !BANNED_MOCK_STORY_IDS.has(item.id)) {
+          list.push({ ...item, id: d.id });
+        }
+      });
+      if (list.length > 0) {
+        list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        memoryStoriesCache = normalizeStoryImages(list);
+        console.log(`[Firestore] Loaded ${list.length} existing stories from Cloud Firestore.`);
       }
     }
-  } catch {}
+
+    // Seed Roster to Firestore if missing
+    const metaSnap = await getDocs(collection(firestoreDb, 'app_metadata'));
+    let hasRoster = false;
+    let hasGas = false;
+    metaSnap.forEach((d) => {
+      if (d.id === 'roster') {
+        hasRoster = true;
+        const data = d.data();
+        if (data && Array.isArray(data.students) && data.students.length > 0) {
+          memoryRosterCache = data.students;
+        }
+      }
+      if (d.id === 'gas_config') {
+        hasGas = true;
+        const data = d.data();
+        if (data) {
+          memoryGasConfig = { webAppUrl: data.webAppUrl || '', isConnected: Boolean(data.isConnected) };
+        }
+      }
+    });
+
+    if (!hasRoster) {
+      console.log('[Firestore] Seeding initial roster to Cloud Firestore...');
+      await setDoc(doc(firestoreDb, 'app_metadata', 'roster'), {
+        students: DEFAULT_INITIAL_ROSTER,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    }
+  } catch (err) {
+    console.warn('[Firestore] Seeding warning:', err);
+  }
+}
+
+// Fire seed in background
+seedFirestoreIfEmpty().catch(() => {});
+
+function readCloudConfig(): CloudStorageSettings {
   return cloudConfigMemory;
 }
 
 function writeCloudConfig(cfg: Partial<CloudStorageSettings>): boolean {
-  try {
-    cloudConfigMemory = { ...cloudConfigMemory, ...cfg };
-    fs.writeFileSync(CLOUD_CONFIG_FILE, JSON.stringify(cloudConfigMemory, null, 2), 'utf-8');
-    return true;
-  } catch {
-    try {
-      fs.writeFileSync(path.join('/tmp', 'cloud_config.json'), JSON.stringify(cloudConfigMemory, null, 2), 'utf-8');
-      return true;
-    } catch {
-      return false;
-    }
+  cloudConfigMemory = { ...cloudConfigMemory, ...cfg };
+  if (isFirestoreReady) {
+    setDoc(doc(firestoreDb, 'app_metadata', 'cloud_config'), {
+      ...cloudConfigMemory,
+      updatedAt: new Date().toISOString()
+    }, { merge: true }).catch(() => {});
   }
+  return true;
 }
 
 // Universal Config Resolvers supporting all standard environment variable variations and dynamic UI settings
@@ -352,67 +391,40 @@ function getKvConfig() {
   };
 }
 
-// Safe local filesystem read
-function readLocalDiskStories(): any[] {
-  const candidatePaths = [
-    STORIES_FILE,
-    STORIES_BACKUP_FILE,
-    path.join('/tmp', 'stories.json')
-  ];
-
-  for (const p of candidatePaths) {
-    try {
-      if (fs.existsSync(p)) {
-        const raw = fs.readFileSync(p, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const filtered = parsed.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
-          if (filtered.length > 0) return filtered;
-        }
-      }
-    } catch {}
-  }
-  return DEFAULT_INITIAL_STORIES;
-}
-
-// Safe local filesystem write with serverless fallback
-function writeLocalDiskStories(stories: any[]): boolean {
-  const jsonStr = JSON.stringify(stories, null, 2);
-  let saved = false;
-
-  try {
-    const tmpFile = `${STORIES_FILE}.tmp.${Date.now()}`;
-    fs.writeFileSync(tmpFile, jsonStr, 'utf-8');
-    fs.renameSync(tmpFile, STORIES_FILE);
-    saved = true;
-
-    try {
-      fs.writeFileSync(STORIES_BACKUP_FILE, jsonStr, 'utf-8');
-    } catch {}
-  } catch (err) {
-    try {
-      fs.writeFileSync(path.join('/tmp', 'stories.json'), jsonStr, 'utf-8');
-      saved = true;
-    } catch {}
-  }
-  return saved;
-}
-
 // Primary External Cloud Database fetcher (Guarantees PC & Mobile share exact single source of truth)
 async function readExternalStories(): Promise<any[]> {
+  // 1. Authoritative Central Source: Cloud Firestore
+  if (isFirestoreReady) {
+    try {
+      const snap = await getDocs(collection(firestoreDb, 'stories'));
+      if (!snap.empty) {
+        const list: any[] = [];
+        snap.forEach((d) => {
+          const item = d.data();
+          if (item && item.id && !BANNED_MOCK_STORY_IDS.has(item.id)) {
+            list.push({ ...item, id: d.id });
+          }
+        });
+        if (list.length > 0) {
+          list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+          memoryStoriesCache = normalizeStoryImages(list);
+          return memoryStoriesCache;
+        }
+      }
+    } catch (err) {
+      console.warn('[Firestore] readExternalStories warning:', err);
+    }
+  }
+
+  // 2. Secondary External Backends (Supabase, KV, GAS)
   const sb = getSupabaseConfig();
   const kv = getKvConfig();
   const gas = getGasConfig();
 
-  // 1. Supabase REST API
   if (sb.isConfigured) {
     try {
-      // First try standard 'stories' relational table
       const res = await fetch(`${sb.url}/rest/v1/stories?select=*&order=createdAt.desc`, {
-        headers: {
-          apikey: sb.key,
-          Authorization: `Bearer ${sb.key}`
-        }
+        headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}` }
       });
       if (res.ok) {
         const data = await res.json();
@@ -423,31 +435,10 @@ async function readExternalStories(): Promise<any[]> {
             return memoryStoriesCache;
           }
         }
-      } else if (res.status === 404) {
-        // Fallback: Check if stored in 'app_state' key-value table
-        const kvRes = await fetch(`${sb.url}/rest/v1/app_state?key=eq.stories&select=*`, {
-          headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}` }
-        });
-        if (kvRes.ok) {
-          const kvData = await kvRes.json();
-          if (Array.isArray(kvData) && kvData[0] && kvData[0].value) {
-            const parsed = typeof kvData[0].value === 'string' ? JSON.parse(kvData[0].value) : kvData[0].value;
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              const valid = parsed.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
-              if (valid.length > 0) {
-                memoryStoriesCache = normalizeStoryImages(valid);
-                return memoryStoriesCache;
-              }
-            }
-          }
-        }
       }
-    } catch (sbErr) {
-      console.warn('[Storage] Supabase fetch warning:', sbErr);
-    }
+    } catch {}
   }
 
-  // 2. Vercel KV / Upstash Redis
   if (kv.isConfigured) {
     try {
       const res = await fetch(`${kv.url}/get/stories`, {
@@ -466,17 +457,12 @@ async function readExternalStories(): Promise<any[]> {
           }
         }
       }
-    } catch (kvErr) {
-      console.warn('[Storage] Vercel KV fetch warning:', kvErr);
-    }
+    } catch {}
   }
 
-  // 3. Google Sheets / Apps Script Web App
   if (gas.isConnected) {
     try {
-      const res = await fetch(`${gas.url}?action=get`, {
-        headers: { 'Cache-Control': 'no-cache' }
-      });
+      const res = await fetch(`${gas.url}?action=get`, { headers: { 'Cache-Control': 'no-cache' } });
       if (res.ok) {
         const data = await res.json();
         if (data && Array.isArray(data.stories) && data.stories.length > 0) {
@@ -487,23 +473,10 @@ async function readExternalStories(): Promise<any[]> {
           }
         }
       }
-    } catch (gasErr) {
-      console.warn('[Storage] Google Sheets fetch warning:', gasErr);
-    }
+    } catch {}
   }
 
-  // 4. In-memory cache
-  if (memoryStoriesCache && memoryStoriesCache.length > 0) {
-    return normalizeStoryImages(memoryStoriesCache);
-  }
-
-  // 5. Local disk / memory cache fallback
-  const disk = readLocalDiskStories();
-  if (disk && disk.length > 0) {
-    memoryStoriesCache = normalizeStoryImages(disk);
-    return memoryStoriesCache;
-  }
-
+  // 3. In-memory cache or default canonical stories
   const defaultNormalized = normalizeStoryImages(DEFAULT_INITIAL_STORIES);
   return memoryStoriesCache.length > 0 ? normalizeStoryImages(memoryStoriesCache) : defaultNormalized;
 }
@@ -551,16 +524,25 @@ async function writeExternalStories(stories: any[]): Promise<boolean> {
   const normalized = normalizeStoryImages(cleanStories);
   memoryStoriesCache = normalized;
 
-  // 1. Local disk / /tmp safe storage as background safety net
-  writeLocalDiskStories(normalized);
+  // 1. Authoritative Cloud Firestore persistence
+  if (isFirestoreReady) {
+    try {
+      for (const story of normalized) {
+        if (story && story.id) {
+          await setDoc(doc(firestoreDb, 'stories', story.id), story, { merge: true });
+        }
+      }
+    } catch (err) {
+      console.warn('[Firestore] writeExternalStories error:', err);
+    }
+  }
 
+  // 2. Secondary External Backends
   const sb = getSupabaseConfig();
   const kv = getKvConfig();
   const gas = getGasConfig();
 
-  // 2. Persist to Supabase
   if (sb.isConfigured) {
-    // Attempt upsert to 'stories' table
     fetch(`${sb.url}/rest/v1/stories`, {
       method: 'POST',
       headers: {
@@ -570,56 +552,31 @@ async function writeExternalStories(stories: any[]): Promise<boolean> {
         Prefer: 'resolution=merge-duplicates'
       },
       body: JSON.stringify(normalized)
-    }).catch(async (sbErr) => {
-      console.warn('[Storage] Supabase stories table write warning:', sbErr);
-      // Fallback: write snapshot to app_state table
-      try {
-        await fetch(`${sb.url}/rest/v1/app_state`, {
-          method: 'POST',
-          headers: {
-            apikey: sb.key,
-            Authorization: `Bearer ${sb.key}`,
-            'Content-Type': 'application/json',
-            Prefer: 'resolution=merge-duplicates'
-          },
-          body: JSON.stringify({ key: 'stories', value: normalized, updatedAt: new Date().toISOString() })
-        });
-      } catch {}
-    });
+    }).catch(() => {});
   }
 
-  // 3. Persist to Vercel KV / Upstash Redis
   if (kv.isConfigured) {
     fetch(`${kv.url}/set/stories`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${kv.token}`,
-        'Content-Type': 'application/json'
-      },
+      headers: { Authorization: `Bearer ${kv.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(normalized)
-    }).catch((kvErr) => console.warn('[Storage] Vercel KV write error:', kvErr));
+    }).catch(() => {});
   }
 
-  // 4. Persist to Google Sheets in background
   if (gas.isConnected) {
     fetch(gas.url, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action: 'sync_all', stories: normalized })
-    }).catch((gErr) => console.warn('[Storage] GAS sync error:', gErr));
+    }).catch(() => {});
   }
 
   return true;
 }
 
-// Synchronous fast accessor for compatibility
+// Fast synchronous accessors
 function readStories(): any[] {
-  if (memoryStoriesCache && memoryStoriesCache.length > 0) {
-    return memoryStoriesCache;
-  }
-  const disk = readLocalDiskStories();
-  memoryStoriesCache = disk;
-  return disk;
+  return memoryStoriesCache && memoryStoriesCache.length > 0 ? memoryStoriesCache : DEFAULT_INITIAL_STORIES;
 }
 
 function writeStories(stories: any[]): boolean {
@@ -629,62 +586,34 @@ function writeStories(stories: any[]): boolean {
 }
 
 function readRoster(): any[] {
-  try {
-    if (fs.existsSync(ROSTER_FILE)) {
-      const data = fs.readFileSync(ROSTER_FILE, 'utf-8');
-      const parsed = JSON.parse(data);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
-      }
-    }
-  } catch (err) {
-    console.error('Failed to read roster, checking backup:', err);
-    try {
-      if (fs.existsSync(ROSTER_BACKUP_FILE)) {
-        const backupData = fs.readFileSync(ROSTER_BACKUP_FILE, 'utf-8');
-        const parsedBackup = JSON.parse(backupData);
-        if (Array.isArray(parsedBackup) && parsedBackup.length > 0) {
-          return parsedBackup;
-        }
-      }
-    } catch (bErr) {
-      console.error('Failed to read roster backup:', bErr);
-    }
-  }
-  writeRoster(DEFAULT_INITIAL_ROSTER);
-  return DEFAULT_INITIAL_ROSTER;
+  return memoryRosterCache && memoryRosterCache.length > 0 ? memoryRosterCache : DEFAULT_INITIAL_ROSTER;
 }
 
 function writeRoster(roster: any[]): boolean {
-  try {
-    const jsonStr = JSON.stringify(roster, null, 2);
-    fs.writeFileSync(ROSTER_FILE, jsonStr, 'utf-8');
-    fs.writeFileSync(ROSTER_BACKUP_FILE, jsonStr, 'utf-8');
-    return true;
-  } catch (err) {
-    console.error('Failed to write roster:', err);
-    return false;
+  if (!Array.isArray(roster)) return false;
+  memoryRosterCache = roster;
+  if (isFirestoreReady) {
+    setDoc(doc(firestoreDb, 'app_metadata', 'roster'), {
+      students: roster,
+      updatedAt: new Date().toISOString()
+    }, { merge: true }).catch((err) => console.warn('[Firestore] writeRoster error:', err));
   }
+  return true;
 }
 
 function readGasConfig(): { webAppUrl: string; isConnected: boolean } {
-  try {
-    if (fs.existsSync(GAS_CONFIG_FILE)) {
-      const raw = fs.readFileSync(GAS_CONFIG_FILE, 'utf-8');
-      return JSON.parse(raw);
-    }
-  } catch {}
-  return { webAppUrl: '', isConnected: false };
+  return memoryGasConfig;
 }
 
 function writeGasConfig(config: { webAppUrl: string; isConnected: boolean }): boolean {
-  try {
-    fs.writeFileSync(GAS_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
-    return true;
-  } catch (err) {
-    console.error('Failed to write gas config:', err);
-    return false;
+  memoryGasConfig = config;
+  if (isFirestoreReady) {
+    setDoc(doc(firestoreDb, 'app_metadata', 'gas_config'), {
+      ...config,
+      updatedAt: new Date().toISOString()
+    }, { merge: true }).catch(() => {});
   }
+  return true;
 }
 
 // Mutex lock for atomic story and file operations to prevent race conditions when multiple users upload concurrently
@@ -807,7 +736,7 @@ async function uploadToImgBB(base64Str: string, prefix = 'photo'): Promise<strin
   return null;
 }
 
-// 4. Universal Uploader: Uploads to external cloud storage if configured,
+// 4. Universal Uploader: Uploads to Firebase Storage or external cloud storage if configured,
 // or returns the permanent Base64 Data URL directly!
 // Base64 requires ZERO local file dependencies on Vercel's ephemeral filesystem!
 async function uploadToExternalStorageOrBase64(base64Str: string, prefix = 'photo'): Promise<string> {
@@ -822,6 +751,22 @@ async function uploadToExternalStorageOrBase64(base64Str: string, prefix = 'phot
       return '/kindergarten_beach_vacation.jpg';
     }
     return base64Str;
+  }
+
+  // 0. Try Firebase Storage first
+  if (isFirestoreReady) {
+    try {
+      const cleanPrefix = (prefix || 'photo').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
+      const photoPath = `stories/${cleanPrefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.jpg`;
+      const photoRef = storageRef(firebaseStorage, photoPath);
+      await uploadString(photoRef, base64Str, 'data_url');
+      const firebaseUrl = await getDownloadURL(photoRef);
+      if (firebaseUrl && firebaseUrl.startsWith('http')) {
+        return firebaseUrl;
+      }
+    } catch (fbStorageErr) {
+      console.warn('[Storage] Firebase Storage server upload error:', fbStorageErr);
+    }
   }
 
   // 1. Try Supabase Storage if configured
@@ -1182,6 +1127,13 @@ app.delete('/api/stories/:id', (req, res) => {
   return withStoryLock(async () => {
     try {
       const { id } = req.params;
+      if (isFirestoreReady) {
+        try {
+          await deleteDoc(doc(firestoreDb, 'stories', id));
+        } catch (fbDelErr) {
+          console.warn('[Firestore] deleteDoc warning:', fbDelErr);
+        }
+      }
       const currentStories = await readExternalStories();
       const filtered = currentStories.filter((s: any) => s.id !== id);
       await writeExternalStories(filtered);

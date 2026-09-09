@@ -1,0 +1,48 @@
+{
+  "entities": {
+    "Story": {
+      "title": "Story",
+      "description": "Weekend story record submitted by kindergarten student or parent",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentName": { "type": "string" },
+        "week": { "type": "string" },
+        "className": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "imageUrls": { "type": "array" },
+        "imageUrl": { "type": "string" },
+        "imageCaptions": { "type": "array" },
+        "aiComment": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "reactions": { "type": "object" },
+        "photoNotes": { "type": "array" }
+      },
+      "required": ["id", "studentName", "week", "content"]
+    },
+    "RosterStudent": {
+      "title": "RosterStudent",
+      "description": "Student in the kindergarten roster",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "className": { "type": "string" },
+        "parentPin": { "type": "string" },
+        "note": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    }
+  },
+  "firestore": {
+    "/stories/{storyId}": {
+      "schema": "Story",
+      "description": "Collection of kindergarten weekend stories"
+    },
+    "/roster/{studentId}": {
+      "schema": "RosterStudent",
+      "description": "Collection of kindergarten student roster records"
+    }
+  }
+}
