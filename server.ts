@@ -22,6 +22,13 @@ import {
   getDownloadURL
 } from 'firebase/storage';
 import appletConfig from './firebase-applet-config.json';
+import {
+  deleteSupabaseStory,
+  fetchSupabaseStories,
+  getSupabaseServerConfig,
+  incrementSupabaseStoryReaction,
+  upsertSupabaseStories
+} from './lib/supabaseServer';
 
 dotenv.config();
 
@@ -343,17 +350,9 @@ function writeCloudConfig(cfg: Partial<CloudStorageSettings>): boolean {
 // Universal Config Resolvers supporting all standard environment variable variations and dynamic UI settings
 function getSupabaseConfig() {
   const dynamic = readCloudConfig();
-  const url = process.env.SUPABASE_URL ||
-              process.env.NEXT_PUBLIC_SUPABASE_URL ||
-              process.env.VITE_SUPABASE_URL ||
-              process.env.REACT_APP_SUPABASE_URL ||
-              dynamic.supabaseUrl || '';
-  const key = process.env.SUPABASE_KEY ||
-              process.env.SUPABASE_SERVICE_ROLE_KEY ||
-              process.env.SUPABASE_ANON_KEY ||
-              process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-              process.env.VITE_SUPABASE_ANON_KEY ||
-              dynamic.supabaseKey || '';
+  const serverConfig = getSupabaseServerConfig();
+  const url = serverConfig.url || dynamic.supabaseUrl || '';
+  const key = serverConfig.key || dynamic.supabaseKey || '';
   const bucket = process.env.SUPABASE_STORAGE_BUCKET ||
                  dynamic.supabaseBucket || 'stories';
   return {
@@ -413,7 +412,20 @@ function sanitizeForFirestore(data: any): any {
 
 // Primary External Cloud Database fetcher (Guarantees PC & Mobile share exact single source of truth)
 async function readExternalStories(): Promise<any[]> {
-  // 1. Authoritative Central Source: Cloud Firestore
+  // 1. Authoritative central source: Supabase
+  const supabaseConfig = getSupabaseServerConfig();
+  if (supabaseConfig.isConfigured) {
+    try {
+      const stories = await fetchSupabaseStories();
+      const valid = stories.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
+      memoryStoriesCache = normalizeStoryImages(valid);
+      return memoryStoriesCache;
+    } catch (err) {
+      console.warn('[Supabase] readExternalStories warning:', err);
+    }
+  }
+
+  // 2. Legacy fallback while existing Firebase data is being migrated
   if (isFirestoreReady) {
     try {
       const snap = await getDocs(collection(firestoreDb, 'stories'));
@@ -437,28 +449,9 @@ async function readExternalStories(): Promise<any[]> {
     }
   }
 
-  // 2. Secondary External Backends (Supabase, KV, GAS)
-  const sb = getSupabaseConfig();
+  // 3. Secondary legacy backends
   const kv = getKvConfig();
   const gas = getGasConfig();
-
-  if (sb.isConfigured) {
-    try {
-      const res = await fetch(`${sb.url}/rest/v1/stories?select=*&order=createdAt.desc`, {
-        headers: { apikey: sb.key, Authorization: `Bearer ${sb.key}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          const valid = data.filter((s: any) => s && s.id && !BANNED_MOCK_STORY_IDS.has(s.id));
-          if (valid.length > 0) {
-            memoryStoriesCache = normalizeStoryImages(valid);
-            return memoryStoriesCache;
-          }
-        }
-      }
-    } catch {}
-  }
 
   if (kv.isConfigured) {
     try {
@@ -548,7 +541,12 @@ async function writeExternalStories(stories: any[]): Promise<boolean> {
   const normalized = normalizeStoryImages(cleanStories);
   memoryStoriesCache = normalized;
 
-  // 1. Authoritative Cloud Firestore persistence
+  // 1. Authoritative Supabase persistence. Await it so failed writes are never reported as saved.
+  if (getSupabaseServerConfig().isConfigured) {
+    await upsertSupabaseStories(normalized);
+  }
+
+  // 2. Legacy Firestore mirror during migration
   if (isFirestoreReady) {
     try {
       for (const story of normalized) {
@@ -567,23 +565,9 @@ async function writeExternalStories(stories: any[]): Promise<boolean> {
     }
   }
 
-  // 2. Secondary External Backends
-  const sb = getSupabaseConfig();
+  // 3. Secondary legacy backends
   const kv = getKvConfig();
   const gas = getGasConfig();
-
-  if (sb.isConfigured) {
-    fetch(`${sb.url}/rest/v1/stories`, {
-      method: 'POST',
-      headers: {
-        apikey: sb.key,
-        Authorization: `Bearer ${sb.key}`,
-        'Content-Type': 'application/json',
-        Prefer: 'resolution=merge-duplicates'
-      },
-      body: JSON.stringify(normalized)
-    }).catch(() => {});
-  }
 
   if (kv.isConfigured) {
     fetch(`${kv.url}/set/stories`, {
@@ -1159,6 +1143,9 @@ app.delete('/api/stories/:id', (req, res) => {
   return withStoryLock(async () => {
     try {
       const { id } = req.params;
+      if (getSupabaseServerConfig().isConfigured) {
+        await deleteSupabaseStory(id);
+      }
       if (isFirestoreReady) {
         try {
           await deleteDoc(doc(firestoreDb, 'stories', id));
@@ -1184,6 +1171,13 @@ app.post('/api/stories/:id/reaction', (req, res) => {
       const { id } = req.params;
       const { emoji } = req.body;
       if (!emoji) return res.status(400).json({ error: 'Emoji is required' });
+
+      if (getSupabaseServerConfig().isConfigured) {
+        await incrementSupabaseStoryReaction(id, emoji);
+        const stories = await fetchSupabaseStories();
+        const reactions = stories.find((story: any) => story.id === id)?.reactions || {};
+        return res.json({ success: true, reactions, stories });
+      }
 
       const currentStories = await readExternalStories();
       const target = currentStories.find((s: any) => s.id === id);
