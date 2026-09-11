@@ -1,4 +1,4 @@
-import { deleteSupabaseStory, fetchSupabaseStories, getSupabaseServerConfig } from '../../lib/supabaseServer';
+import { deleteSupabaseStory, fetchSupabaseStories, getSupabaseServerConfig } from '../../lib/supabaseServer.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Cache-Control', 'no-store');

@@ -1,4 +1,4 @@
-import { getSupabaseServerConfig, uploadSupabaseStoryImage } from '../lib/supabaseServer';
+import { getSupabaseServerConfig, uploadSupabaseStoryImage } from '../lib/supabaseServer.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Cache-Control', 'no-store');

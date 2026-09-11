@@ -6,7 +6,7 @@ import {
   doc,
   setDoc
 } from 'firebase/firestore';
-import appletConfig from '../firebase-applet-config.json';
+import appletConfig from '../firebase-applet-config.json' with { type: 'json' };
 
 const fbConfig = {
   apiKey: process.env.VITE_FIREBASE_API_KEY || process.env.NEXT_PUBLIC_FIREBASE_API_KEY || appletConfig.apiKey || '',

@@ -3,7 +3,7 @@ import {
   fetchSupabaseStories,
   getSupabaseServerConfig,
   upsertSupabaseStories
-} from '../lib/supabaseServer';
+} from '../lib/supabaseServer.js';
 
 function normalizeStory(input: any) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
