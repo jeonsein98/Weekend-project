@@ -25,20 +25,11 @@ import {
 import { RosterStudent, StoryItem, WEEKS_LIST, isWeekMatch, getCurrentWeekString } from '../types';
 import { savePhotoToIndexedDB } from '../lib/idb';
 import { optimizeAndStandardizePhoto } from '../lib/imageOptimizer';
+import { mapWithConcurrency, uploadOptimizedPhoto } from '../lib/photoUpload';
 import {
   syncLocalStoriesToServer,
   saveStoryToServer
 } from '../lib/storage';
-
-async function compressImageFile(file: File): Promise<string> {
-  try {
-    const result = await optimizeAndStandardizePhoto(file, { maxDimension: 1400, quality: 0.84 });
-    return result.dataUrl;
-  } catch (err) {
-    console.error('[AdminModal] compressImageFile error:', err);
-    return '';
-  }
-}
 
 interface AdminModalProps {
   isOpen: boolean;
@@ -88,6 +79,25 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   const [isProxySubmitting, setIsProxySubmitting] = useState(false);
   const proxyFileInputRef = useRef<HTMLInputElement>(null);
   const proxyPreviewMapRef = useRef<Map<string, string>>(new Map());
+  const proxyOwnedPreviewUrlsRef = useRef<Set<string>>(new Set());
+
+  const trackProxyPreviewUrl = (blob: Blob): string => {
+    const url = URL.createObjectURL(blob);
+    proxyOwnedPreviewUrlsRef.current.add(url);
+    return url;
+  };
+
+  const revokeProxyPreviewUrl = (url?: string) => {
+    if (!url || !proxyOwnedPreviewUrlsRef.current.has(url)) return;
+    URL.revokeObjectURL(url);
+    proxyOwnedPreviewUrlsRef.current.delete(url);
+  };
+
+  function clearProxyPreviews() {
+    proxyOwnedPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    proxyOwnedPreviewUrlsRef.current.clear();
+    proxyPreviewMapRef.current.clear();
+  }
 
   // New Student Form State
   const [newName, setNewName] = useState('');
@@ -115,6 +125,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       setPasswordError(false);
     }
   }, [isOpen]);
+
+  useEffect(() => () => clearProxyPreviews(), []);
 
   if (!isOpen) return null;
 
@@ -360,6 +372,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
   // Open Proxy Upload Dialog for a student
   const handleOpenProxyUpload = (studentName?: string, defaultWeek?: string) => {
+    clearProxyPreviews();
     const targetName = studentName || (roster[0]?.name || '');
     setProxyStudentName(targetName);
     const chosenWeek = defaultWeek && WEEKS_LIST.includes(defaultWeek)
@@ -389,52 +402,55 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       onShowToast(`최대 3장까지만 등록 가능하여 ${remainingSlots}장만 추가됩니다.`, 'info');
     }
 
+    const initialPreviews = toProcess.map((file) => trackProxyPreviewUrl(file));
+    setProxyImages((prev) => [...prev, ...initialPreviews].slice(0, 3));
+    setProxyCaptions((prev) => [...prev, ...initialPreviews.map(() => '')].slice(0, 3));
     setIsProxyUploading(true);
     try {
-      const newUrls: string[] = [];
-      const newCaptions: string[] = [];
-
-      for (let i = 0; i < toProcess.length; i++) {
-        const file = toProcess[i];
-        const previewUrl = URL.createObjectURL(file);
-        const dataUrl = await compressImageFile(file);
-
-        if (!dataUrl) {
-          onShowToast(`${file.name} 사진 최적화 중 오류가 발생했습니다.`, 'error');
-          continue;
-        }
-
+      const results = await mapWithConcurrency(toProcess, 2, async (file, i) => {
         try {
-          const uploadRes = await fetch('/api/upload', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              imageData: dataUrl,
-              filename: file.name
-            })
+          const optimized = await optimizeAndStandardizePhoto(file, {
+            maxDimension: 1400,
+            quality: 0.84
           });
+          const optimizedPreview = trackProxyPreviewUrl(optimized.blob);
+          setProxyImages((prev) => prev.map((url) => (
+            url === initialPreviews[i] ? optimizedPreview : url
+          )));
 
-          if (uploadRes.ok) {
-            const upJson = await uploadRes.json();
-            if (upJson.url && (upJson.url.startsWith('http://') || upJson.url.startsWith('https://'))) {
-              proxyPreviewMapRef.current.set(upJson.url, dataUrl);
-              await savePhotoToIndexedDB(upJson.url, dataUrl);
-              newUrls.push(upJson.url);
-              newCaptions.push('');
-              continue;
-            }
-          }
-        } catch (serverErr) {
-          console.warn('Proxy upload server error, using dataUrl fallback:', serverErr);
+          const uploaded = await uploadOptimizedPhoto(
+            optimized.blob,
+            `teacher_${proxyStudentName || 'child'}_${Date.now()}_${i}`
+          );
+          proxyPreviewMapRef.current.set(uploaded.url, optimizedPreview);
+          savePhotoToIndexedDB(uploaded.url, optimized.blob, {
+            studentName: proxyStudentName,
+            week: proxyWeek,
+            photoIndex: currentCount + i
+          }).catch(() => {});
+          return { url: uploaded.url };
+        } catch (error: any) {
+          console.error('[AdminModal] proxy photo upload failed:', error);
+          return { url: '' };
         }
+      });
 
-        newUrls.push(dataUrl);
-        newCaptions.push('');
+      const successfulIndexes = results.flatMap((result, index) => result.url ? [index] : []);
+      setProxyImages((prev) => [
+        ...prev.slice(0, currentCount),
+        ...successfulIndexes.map((index) => results[index].url)
+      ]);
+      setProxyCaptions((prev) => [
+        ...prev.slice(0, currentCount),
+        ...successfulIndexes.map((index) => prev[currentCount + index] || '')
+      ]);
+
+      if (successfulIndexes.length > 0) {
+        onShowToast(`사진 ${successfulIndexes.length}장이 등록되었습니다.`, 'success');
       }
-
-      setProxyImages((prev) => [...prev, ...newUrls]);
-      setProxyCaptions((prev) => [...prev, ...newCaptions]);
-      onShowToast(`사진 ${newUrls.length}장이 등록되었습니다.`, 'success');
+      if (successfulIndexes.length < results.length) {
+        onShowToast(`사진 ${results.length - successfulIndexes.length}장을 올리지 못했습니다. 다시 선택해 주세요.`, 'error');
+      }
     } catch (err) {
       console.error('Error adding proxy files:', err);
       onShowToast('사진 변환 중 오류가 발생했습니다.', 'error');
@@ -444,12 +460,21 @@ export const AdminModal: React.FC<AdminModalProps> = ({
   };
 
   const handleRemoveProxyImage = (index: number) => {
+    const targetUrl = proxyImages[index];
+    const fallbackUrl = proxyPreviewMapRef.current.get(targetUrl);
+    revokeProxyPreviewUrl(targetUrl);
+    revokeProxyPreviewUrl(fallbackUrl);
+    proxyPreviewMapRef.current.delete(targetUrl);
     setProxyImages((prev) => prev.filter((_, i) => i !== index));
     setProxyCaptions((prev) => prev.filter((_, i) => i !== index));
   };
 
   // Submit Proxy Story
   const handleProxySubmit = async () => {
+    if (isProxyUploading) {
+      onShowToast('사진 업로드가 끝난 뒤 등록해 주세요.', 'info');
+      return;
+    }
     if (!proxyStudentName.trim()) {
       onShowToast('원아 이름을 선택하거나 입력해 주세요.', 'error');
       return;
@@ -493,6 +518,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
       setProxyImages([]);
       setProxyCaptions([]);
       setProxyAiComment('');
+      clearProxyPreviews();
     } catch (e) {
       console.error('Failed to proxy upload story:', e);
       onShowToast('이야기 등록 중 오류가 발생했습니다.', 'error');
@@ -1358,7 +1384,13 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowProxyModal(false)}
+                  onClick={() => {
+                    if (!isProxyUploading) {
+                      setShowProxyModal(false);
+                      clearProxyPreviews();
+                    }
+                  }}
+                  disabled={isProxyUploading}
                   className="p-1.5 text-[#8B8378] hover:text-[#2D2A26] rounded-full hover:bg-gray-100"
                 >
                   <X className="w-5 h-5" />
@@ -1406,7 +1438,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
 
                   {proxyImages.length < 3 && (
                     <div
-                      onClick={() => proxyFileInputRef.current?.click()}
+                      onClick={() => !isProxyUploading && proxyFileInputRef.current?.click()}
                       className="border-2 border-dashed border-[#C2D1C5] hover:border-[#7C8E7E] rounded-2xl p-4 text-center cursor-pointer bg-[#FAF9F6] transition-colors"
                     >
                       <input
@@ -1471,6 +1503,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                             <button
                               type="button"
                               onClick={() => handleRemoveProxyImage(pIdx)}
+                              disabled={isProxyUploading}
                               className="absolute top-1 right-1 p-1 bg-rose-600 text-white rounded-full hover:bg-rose-700 shadow-xs"
                             >
                               <X className="w-3 h-3" />
@@ -1511,26 +1544,32 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               <div className="flex gap-2 pt-3 border-t border-[#E8E4D9]">
                 <button
                   type="button"
-                  onClick={() => setShowProxyModal(false)}
+                  onClick={() => {
+                    if (!isProxyUploading) {
+                      setShowProxyModal(false);
+                      clearProxyPreviews();
+                    }
+                  }}
+                  disabled={isProxyUploading}
                   className="flex-1 py-2.5 rounded-xl border border-[#E8E4D9] bg-[#FAF9F6] text-xs font-bold text-[#5D574F] hover:bg-gray-100"
                 >
                   닫기
                 </button>
                 <button
                   type="button"
-                  disabled={isProxySubmitting || proxyImages.length === 0}
+                  disabled={isProxySubmitting || isProxyUploading || proxyImages.length === 0}
                   onClick={handleProxySubmit}
                   className="flex-1 py-2.5 rounded-xl bg-[#2D2A26] hover:bg-[#7C8E7E] text-white text-xs font-extrabold shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50 transition-all"
                 >
-                  {isProxySubmitting ? (
+                  {isProxySubmitting || isProxyUploading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>서버 디스크 저장 중...</span>
+                      <span>{isProxyUploading ? '사진 처리 중...' : '서버 저장 중...'}</span>
                     </>
                   ) : (
                     <>
                       <Send className="w-4 h-4" />
-                      <span>서버 디스크에 즉시 영구 등록</span>
+                      <span>클라우드에 즉시 영구 등록</span>
                     </>
                   )}
                 </button>

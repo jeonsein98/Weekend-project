@@ -15,11 +15,11 @@ import {
   fetchStoriesFromFirestore,
   saveStoryToFirestore,
   deleteStoryFromFirestore,
-  uploadPhotoToFirebaseStorage,
   fetchRosterFromFirestore,
   saveRosterToFirestore,
   isFirebaseConfigured
 } from './firebase';
+import { uploadOptimizedPhoto } from './photoUpload';
 
 const STORAGE_KEY_STORIES = 'weekend_stories_data_v1';
 const STORAGE_KEY_GAS_CONFIG = 'weekend_stories_gas_config_v1';
@@ -256,23 +256,26 @@ export async function syncStoriesWithServer(storiesToSync: StoryItem[]): Promise
 
 /**
  * Save or update story on the persistent server.
- * All base64 images will be converted to permanent external cloud storage (Firebase Storage).
+ * Any recovered base64 images are converted to permanent Supabase Storage URLs.
  * Directly writes to Cloud Firestore and syncs to backend API.
  */
 export async function saveStoryToServer(story: StoryItem): Promise<{ success: boolean; story?: StoryItem; stories?: StoryItem[]; error?: string }> {
   let storyToSave = { ...story };
+  const candidateImageUrls = Array.isArray(storyToSave.imageUrls) && storyToSave.imageUrls.length > 0
+    ? storyToSave.imageUrls
+    : (storyToSave.imageUrl ? [storyToSave.imageUrl] : []);
 
-  // 1. Direct Firebase Storage Upload for high-res photos
-  if (isFirebaseConfigured && Array.isArray(storyToSave.imageUrls) && storyToSave.imageUrls.some(u => typeof u === 'string' && u.startsWith('data:'))) {
+  // 1. Compatibility path for old offline drafts that still contain base64 images.
+  if (candidateImageUrls.some(u => typeof u === 'string' && u.startsWith('data:'))) {
     try {
       const uploadedUrls = await Promise.all(
-        storyToSave.imageUrls.map(async (u, idx) => {
+        candidateImageUrls.map(async (u, idx) => {
           if (typeof u === 'string' && u.startsWith('data:')) {
             const cleanName = (storyToSave.studentName || 'child').replace(/[^a-zA-Z0-9_-]/g, '_');
-            const path = `stories/${cleanName}_${Date.now()}_${idx + 1}.jpg`;
-            const firebaseUrl = await uploadPhotoToFirebaseStorage(u, path);
-            if (firebaseUrl && firebaseUrl.startsWith('http')) {
-              return firebaseUrl;
+            const blob = await fetch(u).then((response) => response.blob());
+            const uploaded = await uploadOptimizedPhoto(blob, `${cleanName}_${Date.now()}_${idx + 1}`);
+            if (uploaded.url.startsWith('http')) {
+              return uploaded.url;
             }
           }
           return u;
@@ -281,25 +284,16 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
       storyToSave.imageUrls = uploadedUrls.filter(u => typeof u === 'string' && !u.startsWith('idb:'));
       storyToSave.imageUrl = storyToSave.imageUrls[0] || '';
     } catch (err) {
-      console.warn('[Storage] Direct Firebase Storage upload preprocessing failed:', err);
+      console.warn('[Storage] Recovered photo upload to Supabase failed:', err);
+      throw err;
     }
+  } else {
+    storyToSave.imageUrls = candidateImageUrls;
   }
 
-  // 2. Also ensure single cover image is permanent via Firebase Storage
-  if (isFirebaseConfigured && typeof storyToSave.imageUrl === 'string' && storyToSave.imageUrl.startsWith('data:')) {
-    try {
-      const cleanName = (storyToSave.studentName || 'child').replace(/[^a-zA-Z0-9_-]/g, '_');
-      const path = `stories/${cleanName}_cover_${Date.now()}.jpg`;
-      const firebaseUrl = await uploadPhotoToFirebaseStorage(storyToSave.imageUrl, path);
-      if (firebaseUrl && firebaseUrl.startsWith('http')) {
-        storyToSave.imageUrl = firebaseUrl;
-        if (!storyToSave.imageUrls || storyToSave.imageUrls.length === 0) {
-          storyToSave.imageUrls = [firebaseUrl];
-        }
-      }
-    } catch (err) {
-      console.warn('[Storage] Cover photo upload warning:', err);
-    }
+  // Keep the cover in sync with the first permanent image.
+  if ((storyToSave.imageUrls || []).length > 0) {
+    storyToSave.imageUrl = storyToSave.imageUrls[0];
   }
 
   // Filter out any invalid idb: pseudo strings
@@ -308,7 +302,7 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
     storyToSave.imageUrl = storyToSave.imageUrls[0] || '';
   }
 
-  // 3. Save directly to Cloud Firestore from client (Immediate Cloud Sync across all devices)
+  // 2. Save directly to Cloud Firestore from client (Immediate Cloud Sync across all devices)
   let firestoreSaved = false;
   if (isFirebaseConfigured) {
     try {
@@ -328,7 +322,7 @@ export async function saveStoryToServer(story: StoryItem): Promise<{ success: bo
     memoryStoriesCache = [storyToSave, ...memoryStoriesCache];
   }
 
-  // 4. Post to backend server API (Single Source of Truth)
+  // 3. Post to backend server API (Single Source of Truth)
   try {
     const res = await fetch('/api/stories', {
       method: 'POST',

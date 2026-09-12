@@ -42,17 +42,19 @@ function openDB(): Promise<IDBDatabase> {
  */
 export async function savePhotoToIndexedDB(
   photoKey: string,
-  dataUrl: string,
+  photo: string | Blob,
   meta?: { studentName?: string; week?: string; photoIndex?: number }
 ): Promise<void> {
-  if (!photoKey || !dataUrl || typeof dataUrl !== 'string' || dataUrl.startsWith('idb:')) return;
+  if (!photoKey || !photo) return;
+  if (typeof photo === 'string' && photo.startsWith('idb:')) return;
   try {
     const db = await openDB();
     const tx = db.transaction(STORE_PHOTOS, 'readwrite');
     const store = tx.objectStore(STORE_PHOTOS);
     store.put({
       photoKey,
-      dataUrl,
+      dataUrl: typeof photo === 'string' ? photo : '',
+      blob: photo instanceof Blob ? photo : null,
       studentName: meta?.studentName || '',
       week: meta?.week || '',
       photoIndex: meta?.photoIndex ?? 0,
@@ -61,6 +63,28 @@ export async function savePhotoToIndexedDB(
   } catch (err) {
     console.warn('[IDB] savePhotoToIndexedDB failed:', err);
   }
+}
+
+async function storedPhotoUrl(value: any): Promise<string | null> {
+  if (typeof value?.dataUrl === 'string' && value.dataUrl && !value.dataUrl.startsWith('idb:')) {
+    return value.dataUrl;
+  }
+  if (value?.blob instanceof Blob && value.blob.size > 0) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(value.blob);
+    });
+  }
+  return null;
+}
+
+function hasStoredPhoto(value: any): boolean {
+  return (
+    (typeof value?.dataUrl === 'string' && value.dataUrl && !value.dataUrl.startsWith('idb:')) ||
+    (value?.blob instanceof Blob && value.blob.size > 0)
+  );
 }
 
 /**
@@ -74,13 +98,8 @@ export async function getPhotoFromIndexedDB(photoKey: string): Promise<string | 
       const tx = db.transaction(STORE_PHOTOS, 'readonly');
       const store = tx.objectStore(STORE_PHOTOS);
       const req = store.get(photoKey);
-      req.onsuccess = () => {
-        const val = req.result?.dataUrl || null;
-        if (val && typeof val === 'string' && !val.startsWith('idb:')) {
-          resolve(val);
-        } else {
-          resolve(null);
-        }
+      req.onsuccess = async () => {
+        resolve(await storedPhotoUrl(req.result));
       };
       req.onerror = () => resolve(null);
     });
@@ -109,7 +128,7 @@ export async function findPhotoForStudent(
         const tx = db.transaction(STORE_PHOTOS, 'readonly');
         const store = tx.objectStore(STORE_PHOTOS);
         const req = store.getAll();
-        req.onsuccess = () => {
+        req.onsuccess = async () => {
           const items = req.result || [];
           // Search with week match first
           const exact = items.find(
@@ -118,11 +137,9 @@ export async function findPhotoForStudent(
               it.studentName?.trim().toLowerCase() === cleanName &&
               (!week || week === '전체' || it.week === week) &&
               it.photoIndex === photoIndex &&
-              typeof it.dataUrl === 'string' &&
-              it.dataUrl.length > 0 &&
-              !it.dataUrl.startsWith('idb:')
+              hasStoredPhoto(it)
           );
-          if (exact) return resolve(exact.dataUrl);
+          if (exact) return resolve(await storedPhotoUrl(exact));
 
           // Search any photo for this student and week
           const anyForWeek = items.find(
@@ -130,22 +147,18 @@ export async function findPhotoForStudent(
               it &&
               it.studentName?.trim().toLowerCase() === cleanName &&
               (!week || week === '전체' || it.week === week) &&
-              typeof it.dataUrl === 'string' &&
-              it.dataUrl.length > 0 &&
-              !it.dataUrl.startsWith('idb:')
+              hasStoredPhoto(it)
           );
-          if (anyForWeek) return resolve(anyForWeek.dataUrl);
+          if (anyForWeek) return resolve(await storedPhotoUrl(anyForWeek));
 
           // Search any photo for this student regardless of week
           const anyStudentPhoto = items.find(
             (it: any) =>
               it &&
               it.studentName?.trim().toLowerCase() === cleanName &&
-              typeof it.dataUrl === 'string' &&
-              it.dataUrl.length > 0 &&
-              !it.dataUrl.startsWith('idb:')
+              hasStoredPhoto(it)
           );
-          if (anyStudentPhoto) return resolve(anyStudentPhoto.dataUrl);
+          if (anyStudentPhoto) return resolve(await storedPhotoUrl(anyStudentPhoto));
 
           resolve(null);
         };

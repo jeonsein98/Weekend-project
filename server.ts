@@ -23,6 +23,7 @@ import {
 } from 'firebase/storage';
 import appletConfig from './firebase-applet-config.json';
 import {
+  createSupabaseStoryImageUpload,
   deleteSupabaseStory,
   fetchSupabaseStories,
   getSupabaseServerConfig,
@@ -1256,6 +1257,20 @@ app.post(['/api/stories/bulk-sync', '/api/stories/sync'], (req, res) => {
 });
 
 // 6. Direct photo upload endpoints (supports both /api/upload and /api/upload-photo)
+app.post('/api/upload-signature', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const name = typeof body.name === 'string' ? body.name : 'photo';
+    const contentType = typeof body.contentType === 'string' ? body.contentType : '';
+    const size = Number(body.size);
+    const upload = await createSupabaseStoryImageUpload(name, contentType, size);
+    return res.json({ success: true, ...upload });
+  } catch (err) {
+    console.error('[Supabase upload signature API] creation failed:', err);
+    return res.status(400).json({ success: false, error: '지원되는 15MB 이하 이미지가 필요합니다.' });
+  }
+});
+
 app.post(['/api/upload', '/api/upload-photo'], async (req, res) => {
   try {
     const body = req.body || {};

@@ -9,7 +9,7 @@
 import heic2any from 'heic2any';
 
 export interface OptimizationResult {
-  dataUrl: string;
+  blob: Blob;
   width: number;
   height: number;
   originalSizeBytes: number;
@@ -160,15 +160,26 @@ export async function optimizeAndStandardizePhoto(
   ctx.drawImage(img, 0, 0, width, height);
 
   // 6. Export as standard high-compatibility JPEG
-  const optimizedDataUrl = canvas.toDataURL('image/jpeg', quality);
-  const optimizedSizeBytes = Math.round((optimizedDataUrl.length * 3) / 4);
+  const optimizedBlob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error('최적화된 사진 파일을 만들 수 없습니다.'));
+        }
+      },
+      'image/jpeg',
+      quality
+    );
+  });
 
   return {
-    dataUrl: optimizedDataUrl,
+    blob: optimizedBlob,
     width,
     height,
     originalSizeBytes: file.size,
-    optimizedSizeBytes,
+    optimizedSizeBytes: optimizedBlob.size,
     format: 'jpeg',
     isHeicConverted
   };

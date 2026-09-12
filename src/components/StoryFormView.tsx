@@ -21,6 +21,7 @@ import {
 import { StoryItem, WEEKS_LIST, RosterStudent, getCurrentWeekString, isWeekMatch, getStudentClass } from '../types';
 import { saveDraftToIndexedDB, getDraftFromIndexedDB, clearDraftFromIndexedDB, savePhotoToIndexedDB } from '../lib/idb';
 import { optimizeAndStandardizePhoto } from '../lib/imageOptimizer';
+import { mapWithConcurrency, uploadOptimizedPhoto } from '../lib/photoUpload';
 
 interface StoryFormViewProps {
   selectedWeek: string;
@@ -63,6 +64,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({ completed: 0, total: 0 });
   const [dragActive, setDragActive] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
 
@@ -121,6 +123,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
   };
 
   const handleParentLogout = () => {
+    clearTrackedPreviews();
     setActiveStudentName('');
     setActiveParentPin('');
     setInputStudentName('');
@@ -158,11 +161,15 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
   // Auto-save draft when photos or captions change
   useEffect(() => {
-    if (activeStudentName && !editingStoryId && imageUrls.length > 0) {
+    const persistentPhotos = imageUrls
+      .map((url, index) => ({ url, caption: imageCaptions[index] || '' }))
+      .filter(({ url }) => !url.startsWith('blob:'));
+
+    if (activeStudentName && !editingStoryId && persistentPhotos.length > 0) {
       saveDraftToIndexedDB(activeStudentName, {
         week,
-        imageUrls,
-        imageCaptions,
+        imageUrls: persistentPhotos.map(({ url }) => url),
+        imageCaptions: persistentPhotos.map(({ caption }) => caption),
         aiComment
       }).catch(() => {});
     }
@@ -170,6 +177,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
   // Open Form to Edit existing story
   const handleStartEditStory = (story: StoryItem) => {
+    clearTrackedPreviews();
     setEditingStoryId(story.id);
     const matchedWeek = WEEKS_LIST.find((w) => isWeekMatch(w, story.week)) || story.week;
     setWeek(matchedWeek);
@@ -192,6 +200,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
   // Open Form to Create new story
   const handleStartNewStory = () => {
+    clearTrackedPreviews();
     setEditingStoryId(null);
     setWeek(selectedWeek === '전체' ? WEEKS_LIST[0] : selectedWeek);
     setTitle('');
@@ -205,6 +214,33 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Persistent preview fallback cache so preview images never flicker or break while waiting for server
   const previewMapRef = useRef<Map<string, string>>(new Map());
+  const ownedPreviewUrlsRef = useRef<Set<string>>(new Set());
+
+  const trackPreviewUrl = (blob: Blob): string => {
+    const url = URL.createObjectURL(blob);
+    ownedPreviewUrlsRef.current.add(url);
+    return url;
+  };
+
+  const revokePreviewUrl = (url?: string) => {
+    if (!url || !ownedPreviewUrlsRef.current.has(url)) return;
+    URL.revokeObjectURL(url);
+    ownedPreviewUrlsRef.current.delete(url);
+  };
+
+  function clearTrackedPreviews() {
+    ownedPreviewUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    ownedPreviewUrlsRef.current.clear();
+    previewMapRef.current.clear();
+  }
+
+  const handleCloseForm = () => {
+    if (isUploadingPhoto) return;
+    setIsFormOpen(false);
+    clearTrackedPreviews();
+  };
+
+  useEffect(() => () => clearTrackedPreviews(), []);
 
   // Handle Image Upload (Max 3) - Universal compatibility for iPhone HEIC, Android, Galaxy, WebP
   const handleFilesAdd = async (files: FileList | File[]) => {
@@ -224,77 +260,65 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
       onShowToast(`최대 3장까지 등록 가능하여, ${availableSlots}장의 사진만 추가됩니다.`, 'info');
     }
 
+    const initialPreviews = toProcess.map((file) => trackPreviewUrl(file));
+    setImageUrls((prev) => [...prev, ...initialPreviews].slice(0, 3));
+    setImageCaptions((prev) => [...prev, ...initialPreviews.map(() => '')].slice(0, 3));
+    setUploadProgress({ completed: 0, total: toProcess.length });
     setIsUploadingPhoto(true);
-    let addedCount = 0;
-    let heicConvertedCount = 0;
 
     try {
-      for (let i = 0; i < toProcess.length; i++) {
-        const file = toProcess[i];
+      const results = await mapWithConcurrency(toProcess, 2, async (file, i) => {
         try {
-          // Use universal optimizer: converts HEIC/HEIF -> JPEG, resizes to crisp 1400px, compresses ~95%
           const result = await optimizeAndStandardizePhoto(file, {
             maxDimension: 1400,
             quality: 0.84
           });
+          const optimizedPreview = trackPreviewUrl(result.blob);
+          setImageUrls((prev) => prev.map((url) => (
+            url === initialPreviews[i] ? optimizedPreview : url
+          )));
 
-          const dataUrl = result.dataUrl;
-          if (!dataUrl) continue;
-          if (result.isHeicConverted) heicConvertedCount++;
-
-          // 1. Instantly append to state using functional updater (setImages(prev => [...prev, newImage]))
-          // This ensures existing images are NEVER overwritten and user gets instant visible preview!
-          setImageUrls((prev) => {
-            if (prev.length >= 3) return prev;
-            return [...prev, dataUrl];
-          });
-          setImageCaptions((prev) => {
-            if (prev.length >= 3) return prev;
-            return [...prev, ''];
-          });
-          addedCount++;
-
-          // 2. Safe index calculation for IndexedDB archive so previous photos at 0, 1 are not overwritten
           const photoIdx = currentCount + i;
           const photoKey = `${activeStudentName || 'child'}_${week}_${photoIdx}`;
-          savePhotoToIndexedDB(photoKey, dataUrl, {
+          savePhotoToIndexedDB(photoKey, result.blob, {
             studentName: activeStudentName || '',
             week,
             photoIndex: photoIdx
           }).catch(() => {});
 
-          // 3. Concurrently upload to server to get permanent disk URL
-          try {
-            const uploadRes = await fetch('/api/upload-photo', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                imageBase64: dataUrl,
-                name: `photo_${activeStudentName || 'child'}_${Date.now()}_${i}`
-              })
-            });
-            if (uploadRes.ok) {
-              const uploadData = await uploadRes.json();
-              if (uploadData.url && (uploadData.url.startsWith('http://') || uploadData.url.startsWith('https://'))) {
-                const serverUrl = uploadData.url;
-                // Cache local dataUrl as fallback
-                previewMapRef.current.set(serverUrl, dataUrl);
-
-                // Seamlessly swap temporary preview dataUrl with permanent external cloud URL
-                setImageUrls((prev) =>
-                  prev.map((item) => (item === dataUrl ? serverUrl : item))
-                );
-              }
-            }
-          } catch (uploadErr) {
-            console.warn('Background photo upload warning:', uploadErr);
-            // Temporary dataUrl remains active in state safely
-          }
+          const uploaded = await uploadOptimizedPhoto(
+            result.blob,
+            `photo_${activeStudentName || 'child'}_${Date.now()}_${i}`
+          );
+          previewMapRef.current.set(uploaded.url, optimizedPreview);
+          return {
+            url: uploaded.url,
+            isHeicConverted: result.isHeicConverted
+          };
         } catch (err: any) {
           console.error('File optimization error:', err);
-          onShowToast(err.message || '사진 처리 중 오류가 발생했습니다.', 'error');
+          return {
+            url: '',
+            isHeicConverted: false
+          };
+        } finally {
+          setUploadProgress((prev) => ({ ...prev, completed: prev.completed + 1 }));
         }
-      }
+      });
+
+      const successfulIndexes = results.flatMap((result, index) => result.url ? [index] : []);
+      setImageUrls((prev) => [
+        ...prev.slice(0, currentCount),
+        ...successfulIndexes.map((index) => results[index].url)
+      ]);
+      setImageCaptions((prev) => [
+        ...prev.slice(0, currentCount),
+        ...successfulIndexes.map((index) => prev[currentCount + index] || '')
+      ]);
+
+      const addedCount = successfulIndexes.length;
+      const failedCount = results.length - addedCount;
+      const heicConvertedCount = results.filter((result) => result.url && result.isHeicConverted).length;
 
       if (addedCount > 0) {
         if (heicConvertedCount > 0) {
@@ -303,6 +327,9 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
           onShowToast(`${addedCount}장의 사진이 안전하게 최적화 첨부되었습니다!`, 'success');
         }
       }
+      if (failedCount > 0) {
+        onShowToast(`사진 ${failedCount}장을 올리지 못했습니다. 다시 선택해 주세요.`, 'error');
+      }
     } finally {
       setIsUploadingPhoto(false);
     }
@@ -310,6 +337,11 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
   // Remove photo at index
   const handleRemoveImage = (index: number) => {
+    const targetUrl = imageUrls[index];
+    const fallbackUrl = previewMapRef.current.get(targetUrl);
+    revokePreviewUrl(targetUrl);
+    revokePreviewUrl(fallbackUrl);
+    previewMapRef.current.delete(targetUrl);
     setImageUrls((prev) => prev.filter((_, i) => i !== index));
     setImageCaptions((prev) => prev.filter((_, i) => i !== index));
     onShowToast(`${index + 1}번째 사진이 삭제되었습니다.`, 'info');
@@ -461,6 +493,10 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
   // Submit / Save
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isUploadingPhoto) {
+      onShowToast('사진 업로드가 끝난 뒤 게시해 주세요.', 'info');
+      return;
+    }
     if (imageUrls.length === 0) {
       onShowToast('사진을 최소 1장 이상 선택해 주세요.', 'error');
       return;
@@ -502,6 +538,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
       setImageCaptions([]);
       setAiComment('');
       setIsFormOpen(false);
+      clearTrackedPreviews();
 
       if (onDone) onDone();
     } catch (err) {
@@ -770,7 +807,8 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
           <div className="bg-white border-b border-[#DBDBDB] px-3.5 py-3 sm:px-5 sm:py-4 flex items-center justify-between sticky top-0 z-20 backdrop-blur-md">
             <button
               type="button"
-              onClick={() => setIsFormOpen(false)}
+              onClick={handleCloseForm}
+              disabled={isUploadingPhoto}
               className="flex items-center gap-1 px-2 py-1 text-xs font-extrabold text-[#737373] hover:text-[#262626] transition-colors"
             >
               <ArrowLeft className="w-4 h-4" />
@@ -789,13 +827,13 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isUploadingPhoto}
               className="flex items-center gap-1 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 hover:opacity-95 text-white font-extrabold text-xs shadow-xs transition-all active:scale-95 disabled:opacity-50"
             >
-              {isSubmitting ? (
+              {isSubmitting || isUploadingPhoto ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span className="hidden sm:inline">게시 중...</span>
+                  <span className="hidden sm:inline">{isUploadingPhoto ? '사진 처리 중...' : '게시 중...'}</span>
                 </>
               ) : (
                 <>
@@ -906,7 +944,9 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                       </div>
                     </div>
                     <span className="text-xs sm:text-sm font-extrabold text-[#262626] mt-1">
-                      {isUploadingPhoto ? '고화질 사진 최적화 및 서버 영구 보관 중...' : `터치하여 사진 올리기 (현재 ${imageUrls.length}/3장)`}
+                      {isUploadingPhoto
+                        ? `사진 ${uploadProgress.completed}/${uploadProgress.total}장 최적화 및 영구 보관 중...`
+                        : `터치하여 사진 올리기 (현재 ${imageUrls.length}/3장)`}
                     </span>
                     <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-[#8E8E8E]">
                       <span>아이폰(HEIC) · 갤럭시 · WebP 자동 호환</span>
@@ -936,6 +976,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleMoveImage(idx, 'left')}
+                                disabled={isUploadingPhoto}
                                 className="p-1.5 bg-[#F5F5F5] hover:bg-[#EFEFEF] text-[#262626] rounded-md text-[10px] font-bold border border-[#DBDBDB]"
                                 title="왼쪽으로 순서 이동"
                               >
@@ -946,6 +987,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleMoveImage(idx, 'right')}
+                                disabled={isUploadingPhoto}
                                 className="p-1.5 bg-[#F5F5F5] hover:bg-[#EFEFEF] text-[#262626] rounded-md text-[10px] font-bold border border-[#DBDBDB]"
                                 title="오른쪽으로 순서 이동"
                               >
@@ -955,6 +997,7 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
                             <button
                               type="button"
                               onClick={() => handleRemoveImage(idx)}
+                              disabled={isUploadingPhoto}
                               className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-md text-[10px] font-bold border border-rose-200"
                               title="삭제"
                             >
@@ -1027,7 +1070,8 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
             <div className="pt-3 border-t border-[#EFEFEF] flex flex-col-reverse sm:flex-row items-center justify-between gap-2.5">
               <button
                 type="button"
-                onClick={() => setIsFormOpen(false)}
+                onClick={handleCloseForm}
+                disabled={isUploadingPhoto}
                 className="w-full sm:w-auto px-6 py-3 rounded-full bg-[#F5F5F5] hover:bg-[#EFEFEF] text-[#737373] hover:text-[#262626] font-bold text-xs border border-[#DBDBDB] transition-all"
               >
                 취소
@@ -1035,13 +1079,13 @@ export const StoryFormView: React.FC<StoryFormViewProps> = ({
 
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={isSubmitting || isUploadingPhoto}
                 className="w-full sm:w-auto flex items-center justify-center gap-2 px-8 py-3.5 rounded-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500 text-white font-extrabold text-xs sm:text-sm shadow-md hover:opacity-95 transition-all active:scale-98 disabled:opacity-50"
               >
-                {isSubmitting ? (
+                {isSubmitting || isUploadingPhoto ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>게시물 올리는 중...</span>
+                    <span>{isUploadingPhoto ? '사진 처리 중...' : '게시물 올리는 중...'}</span>
                   </>
                 ) : (
                   <>

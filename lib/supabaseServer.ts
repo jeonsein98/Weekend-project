@@ -116,3 +116,52 @@ export async function uploadSupabaseStoryImage(dataUrl: string, prefix = 'photo'
   await assertResponse(response, 'image upload');
   return `${config.url}/storage/v1/object/public/${bucket}/${objectPath}`;
 }
+
+export interface SupabaseSignedImageUpload {
+  signedUrl: string;
+  publicUrl: string;
+  path: string;
+}
+
+export async function createSupabaseStoryImageUpload(
+  prefix: string,
+  mime: string,
+  size: number
+): Promise<SupabaseSignedImageUpload> {
+  const config = getSupabaseServerConfig();
+  if (!config.isConfigured) throw new Error('Supabase server configuration is missing');
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) {
+    throw new Error('Unsupported image type');
+  }
+  if (!Number.isFinite(size) || size <= 0 || size > 15 * 1024 * 1024) {
+    throw new Error('Image size is invalid');
+  }
+
+  const extension = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  const safePrefix = prefix.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40) || 'photo';
+  const objectPath = `story-images/${safePrefix}-${Date.now()}-${randomUUID()}.${extension}`;
+  const encodedPath = objectPath.split('/').map(encodeURIComponent).join('/');
+  const bucket = (process.env.SUPABASE_STORAGE_BUCKET || 'stories').trim();
+  const storageApiUrl = `${config.url}/storage/v1`;
+
+  const response = await fetch(`${storageApiUrl}/object/upload/sign/${encodeURIComponent(bucket)}/${encodedPath}`, {
+    method: 'POST',
+    headers: getHeaders(config, { 'Content-Type': 'application/json' }),
+    body: '{}'
+  });
+  await assertResponse(response, 'signed image upload creation');
+
+  const payload = await response.json();
+  const relativeSignedUrl = typeof payload?.url === 'string' ? payload.url : '';
+  if (!relativeSignedUrl) throw new Error('Supabase signed upload URL is missing');
+
+  const signedUrl = /^https?:\/\//i.test(relativeSignedUrl)
+    ? relativeSignedUrl
+    : `${storageApiUrl}${relativeSignedUrl.startsWith('/') ? '' : '/'}${relativeSignedUrl}`;
+
+  return {
+    signedUrl,
+    publicUrl: `${storageApiUrl}/object/public/${encodeURIComponent(bucket)}/${encodedPath}`,
+    path: objectPath
+  };
+}
